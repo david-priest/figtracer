@@ -1,12 +1,20 @@
 # figtracer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/david-priest/figtracer/actions/workflows/ci.yml/badge.svg)](https://github.com/david-priest/figtracer/actions/workflows/ci.yml)
 
 **Git-tracked lab notes whose figures come from your code — in R and Python.**
 
-*A command-line toolkit that threads every figure your analysis produces into a plain-text,
-version-controlled lab note. Drop it into the analysis you already have — or adopt the whole
-experiment-scaffolding system on top.*
+*A plain-text, git-native **electronic lab notebook (ELN)** and reproducible-research toolkit for
+bioinformatics: it threads every figure your analysis produces — in R or Python — into a
+version-controlled Markdown lab note with full provenance, no manual copy-paste. Built for
+single-cell and cytometry (CyTOF / mass cytometry / flow) analysis, it works with Obsidian,
+Quarto, Jupyter notebooks, and any Markdown vault. Drop the figure-provenance loop into the
+analysis you already have — or adopt the whole experiment-scaffolding system on top.*
+
+<sub>Keywords: electronic lab notebook · ELN · reproducible research · research data provenance ·
+bioinformatics · single-cell · flow cytometry · mass cytometry (CyTOF) · R · Python · Quarto ·
+Jupyter · Obsidian · lab notebook software · figure management.</sub>
 
 ## The problem
 
@@ -146,6 +154,14 @@ r/             figtracer.R — the dependency-free R saveFig() shim
 examples/      runnable public-data example (cytof: R + Python -> one note)
 docs/          getting-started + protocol docs
 ```
+
+## Related
+
+figtracer is developed alongside **[GateLabR](https://github.com/david-priest/GateLabR)** — an
+open-source interactive manual-gating app for flow cytometry and CyTOF (mass cytometry)
+`SingleCellExperiment` objects in R/Shiny. GateLabR gates your cells; figtracer keeps the
+resulting figures and analysis in a provenance-tracked lab notebook. Together they cover the
+single-cell / cytometry workflow from gating to a reproducible written record.
 
 ## License
 
