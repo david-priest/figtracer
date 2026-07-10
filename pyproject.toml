@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Programmatise the lab: scaffold experiments, assemble figures, render protocols, close the loop — one front door (labkit + figtools)."
 requires-python = ">=3.11"
 license = {text = "MIT"}
-authors = [{name = "David Priest"}]
+authors = [{name = "David G. Priest"}]
 readme = "README.md"
 classifiers = [
     "License :: OSI Approved :: MIT License",

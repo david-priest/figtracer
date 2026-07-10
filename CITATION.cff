@@ -7,7 +7,7 @@ abstract: >-
   each figure to the code and git commit that produced it across R and Python.
 type: software
 authors:
-  - given-names: David
+  - given-names: "David G."
     family-names: Priest
     orcid: "https://orcid.org/0000-0003-0095-6718"
     affiliation: "Wing Lab, Center for Infectious Disease Education and Research (CIDER), Osaka University, Japan"
