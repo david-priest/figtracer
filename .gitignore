@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.DS_Store
+uv.lock
+
+# figure output the tool itself creates (f2 / savefig land here)
+outputs/
+
+# secrets / local env — defense in depth (none are committed)
+.env
+.env.*
+
+# data objects the tool operates on — never commit real data by accident
+*.rds
+*.RData
+*.qs2
+*.qs
+*.fcs
+*.h5ad

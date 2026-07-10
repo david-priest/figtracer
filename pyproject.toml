@@ -1,0 +1,51 @@
+[project]
+name = "figtracer"
+version = "0.1.0"
+description = "Programmatise the lab: scaffold experiments, assemble figures, render protocols, close the loop — one front door (labkit + figtools)."
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "David Priest"}]
+readme = "README.md"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+]
+# Union of the three former packages' deps so the whole toolchain installs from one wheel.
+dependencies = ["PyYAML>=6", "openpyxl>=3", "lxml>=5"]
+
+[project.urls]
+Homepage = "https://github.com/david-priest/figtracer"
+Repository = "https://github.com/david-priest/figtracer"
+Issues = "https://github.com/david-priest/figtracer/issues"
+Changelog = "https://github.com/david-priest/figtracer/blob/main/CHANGELOG.md"
+
+[project.scripts]
+figtracer = "figtracer.cli:main"
+labkit = "labkit.cli:main"
+figtools = "figtools.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["figtracer", "labkit", "figtools"]
+
+[tool.setuptools.package-data]
+# Data dirs live INSIDE each package so they ship in the wheel (pipx/git installs work,
+# not just editable). figtools resolves journals via dirname(__file__)/config; labkit
+# resolves templates + the bundled example registry the same way.
+figtools = ["config/*.yaml"]
+labkit = ["templates/*", "config/*.yaml"]
+
+[project.optional-dependencies]
+# `pip install -e ".[dev]"` for the test toolchain. Kept out of runtime deps.
+# matplotlib is a TEST-only dep: it drives the real figure through the end-to-end loop
+# (savefig -> assemble -> note); figtracer itself duck-types plotting objects and never
+# imports it. Tests that use it `importorskip`, so the suite still runs without it.
+dev = ["pytest>=8", "matplotlib>=3"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

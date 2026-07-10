@@ -1,0 +1,33 @@
+# Journal formatting profiles. Widths in cm, fonts in pt.
+# Add new journals by copying a block. `figtools check --journal <key>` reads these.
+
+sci_immunol:
+  name: Science Immunology
+  widths_cm:
+    single: 8.9       # 1 column
+    oneandhalf: 12.0  # 1.5 column (approx)
+    full: 18.4        # 2 column / full width  <- stated by the journal
+  max_height_cm: 24.0
+  min_font_pt: 6.0    # journal-stated minimum
+  hairline_pt: 0.5    # minimum effective stroke width
+  fonts: [Arial, Helvetica]
+  default_label:
+    font: Arial
+    weight: bold
+    size_pt: 8.0
+
+# Generic fallback / starting point for other journals.
+generic:
+  name: Generic
+  widths_cm:
+    single: 8.5
+    oneandhalf: 12.0
+    full: 17.4
+  max_height_cm: 23.0
+  min_font_pt: 6.0
+  hairline_pt: 0.5
+  fonts: [Arial, Helvetica]
+  default_label:
+    font: Arial
+    weight: bold
+    size_pt: 8.0

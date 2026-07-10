@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use figtracer, please cite it as below."
+title: "figtracer: plain-text, provenance-tracked lab records from bench protocol to publication figure"
+abstract: >-
+  A command-line toolkit that keeps a lab's records — bench protocols, analysis figures,
+  written lab notes, and project state — consistent, versioned, and plain-text, threading
+  each figure to the code and git commit that produced it across R and Python.
+type: software
+authors:
+  - given-names: David
+    family-names: Priest
+    orcid: "https://orcid.org/0000-0003-0095-6718"
+    affiliation: "Wing Lab, Center for Infectious Disease Education and Research (CIDER), Osaka University, Japan"
+repository-code: "https://github.com/david-priest/figtracer"
+license: MIT
+version: 0.1.0
+date-released: 2026-07-10
+keywords:
+  - reproducibility
+  - provenance
+  - electronic lab notebook
+  - scientific workflow
+  - single-cell
+  - cytometry

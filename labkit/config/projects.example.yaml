@@ -1,0 +1,20 @@
+# labkit project registry (EXAMPLE) — copy to ~/.config/labkit/projects.yaml (or let
+# `labkit init` seed it) and edit. `vault_root` comes from your user config / `labkit init`;
+# `templates_dir` ships with the package, so neither needs to be set here.
+#
+# Each project defines where its experiment notes + data live (relative to the vault for notes,
+# absolute for data) and the standing context seeded into every new experiment note.
+
+projects:
+  EXAMPLE:
+    title: "Example project"
+    vault_dir: "Example Project/Experiments"          # experiment-note folders, relative to vault_root
+    data_root: "~/data/Example Project"               # where raw data + analysis folders live (absolute or ~)
+    default_platform: CyTOF                            # CyTOF | flow | 10x_5p | 10x_3p | other
+    template: wetlab_experiment                        # a templates/<name>.md shipped with labkit
+    dashboard: "Example Project/Example — Mission Control.md"   # Mission Control note, relative to vault_root
+    context: >-
+      One paragraph of standing project context (disease, platform, key reagents, goals).
+      This is seeded into every new experiment note for this project.
+    related:
+      - "[[Some related note]]"

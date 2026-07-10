@@ -1,0 +1,59 @@
+---
+title: "figtracer example — MPN CyTOF (R / seekit arm)"
+format: html
+---
+
+<!--
+The R side of the cross-language figtracer example. Loads a public MPN CyTOF
+SingleCellExperiment (Zenodo 10.5281/zenodo.7982165; see DATASETS.md), clusters it with
+seekit, and saves three figures with `f2()` — each appends a line to `outputs/MANIFEST.jsonl`,
+the language-agnostic contract the Python arm also writes to. `figtracer fig embed`/`figsync`
+then pull figures from BOTH arms into one lab note.
+
+Download the data first (see README.md) into ./data/, or point FIGTRACER_EXAMPLE_DATA at it.
+-->
+
+```{r setup}
+source("~/code/seekit/tools/reload_helpers.R")   # seekit helpers (f2, cluster2, plotExprHeatmap1, plotDR2)
+suppressPackageStartupMessages(library(SingleCellExperiment))
+```
+
+```{r load}
+# configurable data location — never a hardcoded personal path
+data_dir <- Sys.getenv("FIGTRACER_EXAMPLE_DATA", unset = here::here("data"))
+sce <- get(load(file.path(data_dir, "MPN_sce.RData")))
+sce                                                # 211k cells x 36 markers; condition = JAK2 / Non_JAK2
+```
+
+```{r cluster}
+# FlowSOM + metaclustering via seekit (adds cluster_id + cluster_codes: som100 -> meta20)
+sce <- cluster2(sce, features = "type", maxK = 20, seed = 1)
+```
+
+```{r heatmap}
+# marker medians per metacluster — the phenotype fingerprint
+h <- plotExprHeatmap1(sce, by = "cluster_id", k = "meta20", scale = "last",
+                      title = "MPN — marker medians (meta20)")
+f2(h, title = "mpn_heatmap_meta20", w = 22, h = 14, format = "pdf", embed = TRUE)
+```
+
+```{r umap}
+# the dataset ships a UMAP; colour it by metacluster
+u <- plotDR2(sce, dr = "UMAP", color_by = "meta20", pointsize = 0.3, rast = TRUE)
+f2(u, title = "mpn_umap_meta20", w = 16, h = 14, format = "pdf", embed = TRUE)
+```
+
+```{r abundance}
+# metacluster composition per sample, split by condition (JAK2 vs Non_JAK2)
+library(ggplot2)
+cd <- as.data.frame(colData(sce))
+cd$meta20 <- cluster_ids(sce, "meta20")
+prop <- as.data.frame(prop.table(table(cd$sample_id, cd$meta20), margin = 1))
+names(prop) <- c("sample_id", "meta20", "freq")
+prop$condition <- cd$condition[match(prop$sample_id, cd$sample_id)]
+ab <- ggplot(prop, aes(meta20, freq, fill = condition)) +
+  geom_boxplot(outlier.size = 0.4, position = position_dodge(0.8)) +
+  labs(x = "metacluster", y = "fraction of cells", title = "MPN — abundance by condition") +
+  theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+f2(ab, title = "mpn_abundance_by_condition", w = 18, h = 10, format = "pdf", embed = TRUE)
+```
