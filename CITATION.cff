@@ -12,6 +12,7 @@ authors:
     orcid: "https://orcid.org/0000-0003-0095-6718"
     affiliation: "Wing Lab, Center for Infectious Disease Education and Research (CIDER), Osaka University, Japan"
 repository-code: "https://github.com/david-priest/figtracer"
+doi: "10.5281/zenodo.21288980"
 license: MIT
 version: 0.1.0
 date-released: 2026-07-10
