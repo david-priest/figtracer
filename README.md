@@ -156,14 +156,6 @@ examples/      runnable public-data example (cytof: R + Python -> one note)
 docs/          getting-started + protocol docs
 ```
 
-## Related
-
-figtracer is developed alongside **[GateLabR](https://github.com/david-priest/GateLabR)** — an
-open-source interactive manual-gating app for flow cytometry and CyTOF (mass cytometry)
-`SingleCellExperiment` objects in R/Shiny. GateLabR gates your cells; figtracer keeps the
-resulting figures and analysis in a provenance-tracked lab notebook. Together they cover the
-single-cell / cytometry workflow from gating to a reproducible written record.
-
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
