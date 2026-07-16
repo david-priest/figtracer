@@ -62,9 +62,39 @@ provenance, while using the blessed labelled object as the reproducible release 
 f2(p, embed = TRUE)              # f2 uses the unique chunk label as its stable title
 ```
 
-Internal source remains fully detailed. These declarations let a future bundle generator make
-a conservative plan for a collaborator or publication view rather than deleting code by
-heuristic guesswork.
+Internal source remains fully detailed. These declarations let `figtracer doctor bundle`
+(below) make a conservative plan for a collaborator or publication view rather than deleting
+code by heuristic guesswork.
+
+## Generating a derived view — `figtracer doctor bundle`
+
+Where `figtracer doctor analysis` *diagnoses* whether the canonical internal QMD is ready for a
+view, `figtracer doctor bundle` *generates* it:
+
+```bash
+figtracer doctor bundle analysis.qmd --profile publication            # -> analysis.publication.qmd
+figtracer doctor bundle analysis.qmd --profile collaborator -o out.qmd
+figtracer doctor bundle analysis.qmd --profile publication --dry-run  # report the plan, write nothing
+figtracer doctor bundle analysis.qmd --profile publication --json     # per-chunk audit summary
+```
+
+It reads the same `share` intent the doctor checks and decides each chunk:
+
+| Chunk | Condition | In the derived QMD |
+|---|---|---|
+| **included** | shared to the profile | copied verbatim |
+| **frozen** | `share: documentation`, or stochastic code in the `publication` view | kept but made `#\| eval: false` — non-executable provenance |
+| **excluded** | not shared to the profile | dropped, with a visible `<!-- omitted -->` marker (never silent) |
+
+**Freezing is the point.** Stochastic processing (clustering, UMAP, thresholding, clonal trees…)
+is retained as non-executable provenance; the derived view instead loads the **blessed labelled
+object** (`analysis.inputs` / `final_labels`) as the reproducible boundary — so a publication view
+is deterministic without re-running seeds, while the original code stays auditable.
+
+Guarantees: it **never edits the source**; it **refuses a doctor-`BLOCKED` notebook** at that
+profile (unless `--force`); it is **deterministic** (stamps the source git commit, not a
+timestamp); and the output **round-trips clean** — running the doctor on the generated QMD at the
+same profile returns `READY`.
 
 ## Suppressions
 

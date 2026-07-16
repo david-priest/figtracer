@@ -478,7 +478,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="suppress a named rule (repeatable; also configurable in QMD frontmatter)",
     )
     analysis.set_defaults(func=_cmd_analysis)
+
+    bundle = sub.add_parser(
+        "bundle",
+        help="generate a conservative derived QMD for a collaborator/publication view",
+    )
+    bundle.add_argument("src", help="the canonical internal QMD")
+    bundle.add_argument("--profile", choices=[p for p in PROFILES if p != "internal"],
+                        required=True, help="the derived view to generate")
+    bundle.add_argument("-o", "--out", help="output QMD path (default: <src>.<profile>.qmd)")
+    bundle.add_argument("--force", action="store_true",
+                        help="generate even if the doctor BLOCKs the notebook at this profile")
+    bundle.add_argument("--dry-run", action="store_true", help="report the plan; write nothing")
+    bundle.add_argument("--json", action="store_true", help="emit the per-chunk audit summary as JSON")
+    bundle.set_defaults(func=_cmd_bundle)
     return parser
+
+
+def _cmd_bundle(args: argparse.Namespace) -> int:
+    from figtracer import bundle          # lazy: bundle imports from this module
+    return bundle.run(args)
 
 
 def _cmd_analysis(args: argparse.Namespace) -> int:
