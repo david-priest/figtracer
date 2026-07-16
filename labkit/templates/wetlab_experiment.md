@@ -2,6 +2,7 @@
 experiment_id: {{exp_id}}
 project: {{project}}
 title: {{title}}
+role: hub                   # this experiment's central note (figtracer resolves the hub by this)
 status: planning            # planning → staining → acquired → analysing → done | blocked
 platform: {{platform}}      # CyTOF | flow | 10x_5p | 10x_3p | other
 samples: {{samples}}

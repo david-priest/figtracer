@@ -49,3 +49,22 @@ analysis runs; a manifest-tracked figure re-syncs.
   don't guess file paths.
 - **Start with the figure loop.** A user does not need the full experiment system to benefit —
   dropping `saveFig()`/`savefig()` into their existing analysis is the smallest useful step.
+
+## Repo hygiene (the basics — don't wreck the user's work)
+
+figtracer is git-native: an experiment's data folder is a git repo and `figtracer sync` commits it
+**locally**. That makes their work recoverable — but only if you don't do something rash. The user
+may not be git-fluent, so these are on you:
+
+- **Never rewrite history.** No force-push, no `reset --hard`, no rebasing or amending commits the
+  user might already depend on. If history looks tangled, **stop and ask** — don't "tidy" it.
+- **Keep raw data out of git.** FCS / `.qs2` / `.rds` objects run to hundreds of MB or GB. The shipped
+  `.gitignore` excludes them (and `outputs/`). Never `git add -f` a big binary "just this once" — it
+  bloats the repo permanently and can't be cleanly removed later.
+- **Commit locally; don't push unless asked.** `sync` commits and deliberately never pushes. Pushing,
+  and anything that makes work public, is the user's decision.
+- **Don't hand-edit generated files.** The `— Figure provenance (auto)` note and Mission Control
+  dashboards are rewritten on the next sync — edits are silently lost. Fix the source instead.
+- **Fix forward, don't patch sideways.** If a figure is wrong, correct the analysis and re-run so the
+  note re-syncs. Don't hand-place figures or edit the manifest to paper over it.
+- **When unsure, do nothing destructive.** git is the safety net, not a licence to be careless.

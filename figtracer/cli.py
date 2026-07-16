@@ -43,6 +43,9 @@ usage: figtracer <command> [args]
   data objects
     data <sub>    scan | status | bless | trash — content-addressed object registry
 
+  analysis quality
+    doctor <sub>  analysis — profile-aware QMD checks for agents and CI
+
   share
     export        clean collaborator PDF of an experiment's notes (drops Log + frontmatter)
 
@@ -93,6 +96,12 @@ def main(argv=None) -> int:
         if not rest or rest[0] in ("-h", "--help"):
             return data.main(["-h"])
         return data.main(rest)
+
+    if cmd == "doctor":
+        from figtracer import analysis_doctor
+        if not rest or rest[0] in ("-h", "--help"):
+            return analysis_doctor.main(["-h"])
+        return analysis_doctor.main(rest)
 
     print(f"figtracer: unknown command '{cmd}'\n", file=sys.stderr)
     print(USAGE)

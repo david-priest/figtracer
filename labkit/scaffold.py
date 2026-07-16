@@ -41,9 +41,14 @@ def _fill(template: str, mapping: dict) -> str:
     return template
 
 
-def _qmd_stub(exp_id: str, title: str, data_dir: str) -> str:
+def _qmd_stub(exp_id: str, title: str, data_dir: str, platform: str = "other") -> str:
     return f'''---
 title: "{exp_id} — {title}"
+analysis:
+  modality: "{platform}"
+  role: mixed
+  # Opt into collaborator/publication only after reviewing the derived view.
+  share: [internal]
 ---
 
 ```{{r setup}}
@@ -63,9 +68,9 @@ data_dir <- "{data_dir}"
 
 # Figures
 
-```{{r}}
+```{{r first-figure}}
 # p <- plotDR2(sce, dr = "UMAP", color_by = "...")
-# f2(p, w = 10, h = 6, title = "...", format = "svg")
+# f2(p, w = 10, h = 6, format = "svg", embed = TRUE)
 ```
 '''
 
@@ -85,10 +90,13 @@ def new(project: str, title: str, platform: str | None = None,
     exp_id = _next_id(vault_exp_dir, project, date)
     slug = _slug(title)
 
-    # vault note folder + attachments
+    # vault note folder + attachments. The hub is named as a **folder note** (stem == its
+    # folder) so Obsidian folder-note plugins open it when you click the folder — the note's
+    # "I am this experiment's front page" signal. Its frontmatter also carries `role: hub`, so
+    # resolution never depends on the filename (see sync._canonical); rename it freely.
     note_folder = os.path.join(vault_exp_dir, f"{exp_id} {slug}")
     os.makedirs(os.path.join(note_folder, "attachments"), exist_ok=True)
-    note_path = os.path.join(note_folder, f"{exp_id}.md")
+    note_path = os.path.join(note_folder, os.path.basename(note_folder) + ".md")
 
     # --- data/analysis/exports: backfill an existing run, or scaffold fresh ---
     backfill = bool(existing_data)
@@ -131,7 +139,7 @@ def new(project: str, title: str, platform: str | None = None,
         fh.write(note)
     if not backfill and not os.path.exists(qmd_path):
         with open(qmd_path, "w") as fh:
-            fh.write(_qmd_stub(exp_id, title, data_dir))
+            fh.write(_qmd_stub(exp_id, title, data_dir, platform))
 
     return {"experiment_id": exp_id, "note": note_path, "data_dir": data_dir,
             "analysis_qmd": qmd_path, "exports_dir": exports_dir}

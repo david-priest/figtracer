@@ -2,6 +2,7 @@
 experiment_id: {{exp_id}}
 project: {{project}}
 title: {{title}}
+role: hub                   # this experiment's central note (figtracer resolves the hub by this)
 status: planning            # planning → running → analysing → writing → done | blocked
 kind: methods_benchmark     # computational benchmark, not a wet-lab run
 data_dir: "{{data_dir}}"

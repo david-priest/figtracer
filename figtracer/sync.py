@@ -43,9 +43,28 @@ def _all_experiment_notes(cfg) -> list[dict]:
 
 
 def _canonical(notes: list[dict], eid: str) -> dict:
-    """Of all notes sharing an experiment_id, prefer the `<eid>.md` hub note."""
+    """Of all notes sharing an experiment_id, pick the experiment's hub note.
+
+    Three signals, first match wins — so both the current and the legacy scaffold resolve:
+      1. `role: hub` in frontmatter — explicit and naming-independent; written by `figtracer new`.
+         This is what decouples the hub from its filename: rename the note freely in Obsidian.
+      2. the **folder note** — stem == its parent folder. That's the Obsidian folder-note
+         convention (clicking the folder opens the hub), which is how `new` now names it.
+      3. legacy `<eid>.md` — the pre-folder-note scaffold; keeps existing experiments working.
+    """
     same = [fm for fm in notes if str(fm.get("experiment_id")) == eid]
-    same.sort(key=lambda fm: os.path.basename(fm["_note"]) != f"{eid}.md")
+
+    def rank(fm: dict) -> tuple:
+        path = fm["_note"]
+        stem = os.path.splitext(os.path.basename(path))[0]
+        folder = os.path.basename(os.path.dirname(path))
+        return (
+            str(fm.get("role", "")).strip().lower() != "hub",   # 1. explicit marker
+            stem != folder,                                     # 2. folder note
+            stem != eid,                                        # 3. legacy <eid>.md
+        )
+
+    same.sort(key=rank)
     return same[0]
 
 

@@ -97,12 +97,16 @@ figtracer new       scaffold a fully cross-linked experiment: notes + data/analy
 figtracer index     rebuild a project's Mission Control dashboard (every experiment by status)
 figtracer protocol  render a bench protocol.yaml -> a printable sheet + a Markdown shadow
 figtracer data      a content-addressed registry of analysis objects (.qs2/.rds/.RData)
+figtracer doctor    profile-aware QMD checks for internal, collaborator, and publication views
 figtracer sync      end-of-session roundup: figures -> note -> dashboard -> git commit
 figtracer export    a clean collaborator-facing PDF of an experiment's notes
 ```
 
 `labkit` (scaffolding + Mission Control) and `figtools` (figure assembly) also ship as
 standalone console scripts; `figtracer` is a convenience front door over them.
+
+The [analysis doctor](docs/ANALYSIS_DOCTOR.md) gives humans, agents, and CI a named,
+suppressible checklist while keeping one detailed internal QMD as the source of truth.
 
 ## How figtracer compares
 
