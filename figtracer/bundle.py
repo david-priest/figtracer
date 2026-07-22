@@ -22,6 +22,7 @@ It reuses the doctor's parser wholesale (`parse_qmd`, the `Chunk`/`Document` mod
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -38,6 +39,8 @@ from figtracer.analysis_doctor import (
 
 # You derive collaborator/publication views; "internal" IS the canonical source, not a bundle target.
 DERIVABLE = tuple(p for p in PROFILES if p != "internal")
+_EVAL_OPTION = re.compile(r"^\s*#\|\s*eval\s*:", re.IGNORECASE)
+_HEADER_EVAL = re.compile(r",\s*eval\s*=\s*[^,}]+", re.IGNORECASE)
 
 
 def _effective_share(doc, chunk) -> set[str]:
@@ -103,6 +106,30 @@ def _frontmatter_lines(doc, profile: str, src_name: str, commit: str | None) -> 
     )
 
 
+def _freeze_chunk(opening: str, body: list[str], closing: str) -> list[str]:
+    """Return a chunk whose effective Quarto ``eval`` option is always false.
+
+    Quarto uses the last duplicate YAML key, so merely prepending ``eval: false``
+    is unsafe when the source already declares ``eval: true``.  Normalize the
+    leading option block and legacy fence option before inserting one canonical
+    non-executable value.
+    """
+    opening = _HEADER_EVAL.sub("", opening)
+    leading_blanks: list[str] = []
+    i = 0
+    while i < len(body) and not body[i].strip():
+        leading_blanks.append(body[i])
+        i += 1
+
+    options: list[str] = []
+    while i < len(body) and body[i].lstrip().startswith("#|"):
+        if not _EVAL_OPTION.match(body[i]):
+            options.append(body[i])
+        i += 1
+
+    return [opening, *leading_blanks, "#| eval: false", *options, *body[i:], closing]
+
+
 def generate(src, profile: str) -> tuple[str, dict]:
     """Build the derived QMD text + an audit summary. Pure — writes nothing."""
     if profile not in DERIVABLE:
@@ -131,9 +158,7 @@ def generate(src, profile: str) -> tuple[str, dict]:
             out.extend(lines[i:close + 1])
         elif action == "freeze":
             out.append(f"<!-- figtracer: frozen — {reason} -->")
-            out.append(lines[i])                        # opening fence
-            out.append("#| eval: false")                # joins any existing #| options above the code
-            out.extend(lines[i + 1:close + 1])          # original body + closing fence
+            out.extend(_freeze_chunk(lines[i], lines[i + 1:close], lines[close]))
         else:  # exclude
             out.append(f"<!-- figtracer: omitted chunk '{label}' — {reason} -->")
         i = close + 1
@@ -157,6 +182,12 @@ def run(args) -> int:
     if not src.is_file() or src.suffix.lower() != ".qmd":
         print(f"bundle: not a QMD file: {src}")
         return 2
+    out_path = Path(args.out).expanduser() if args.out else src.with_suffix(
+        f".{args.profile}.qmd"
+    )
+    if src.resolve() == out_path.resolve():
+        print("bundle: --out must be different from the canonical source QMD")
+        return 2
 
     # Gate: don't derive a view from a notebook the doctor blocks at this profile.
     report = diagnose(src, profile=args.profile)
@@ -170,7 +201,6 @@ def run(args) -> int:
         return 1
 
     text, summary = generate(src, args.profile)
-    out_path = Path(args.out) if args.out else src.with_suffix(f".{args.profile}.qmd")
 
     if args.json:
         print(json.dumps(summary, indent=2))

@@ -94,6 +94,32 @@ def test_freeze_injects_eval_false_and_keeps_code(tmp_path):
     assert "figtracer: frozen" in text
 
 
+def test_freeze_replaces_conflicting_eval_true(tmp_path):
+    src = _write(tmp_path, SRC.replace(
+        "#| label: flowsom\n#| share: documentation",
+        "#| label: flowsom\n#| eval: true\n#| share: documentation",
+    ))
+
+    text, _ = bundle.generate(src, "publication")
+    out = _write(tmp_path, text, name="analysis.publication.qmd")
+    doc, problems = doctor.parse_qmd(out)
+    flowsom = next(chunk for chunk in doc.chunks if chunk.label == "flowsom")
+
+    assert problems == []
+    assert flowsom.options["eval"] is False
+    assert flowsom.body.count("#| eval:") == 1
+
+
+def test_freeze_removes_legacy_fence_eval_true(tmp_path):
+    src = _write(tmp_path, SRC.replace(
+        "```{r}\n#| label: flowsom\n#| share: documentation",
+        "```{r, eval=TRUE}\n#| label: flowsom\n#| share: documentation",
+        1,
+    ))
+    text, _ = bundle.generate(src, "publication")
+    assert "eval=TRUE" not in text
+
+
 def test_excluded_chunk_leaves_a_visible_marker_not_silence(tmp_path):
     src = _write(tmp_path, SRC)
     text, _ = bundle.generate(src, "publication")
@@ -129,3 +155,15 @@ def test_cli_dry_run_writes_nothing(tmp_path):
     rc = doctor.main(["bundle", str(src), "--profile", "publication", "--dry-run"])
     assert rc == 0
     assert not out.exists()
+
+
+def test_cli_refuses_to_overwrite_source(tmp_path):
+    src = _write(tmp_path, SRC)
+    original = src.read_text()
+
+    rc = doctor.main([
+        "bundle", str(src), "--profile", "publication", "--out", str(src), "--force",
+    ])
+
+    assert rc == 2
+    assert src.read_text() == original

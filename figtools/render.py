@@ -1,5 +1,5 @@
 """`figtools render COMPILED.svg -o preview.png --dpi 300` — rasterize an SVG to PNG via
-headless Chrome (already on the machine; zero install; matches the lab's md->PDF convention).
+headless Chrome/Chromium (discovered portably or set with ``FIGTRACER_CHROME``).
 
 Output pixel dimensions == physical_inches x dpi, so the preview is true-to-size.
 We inline the SVG into a minimal HTML page sized in CSS px and screenshot it.
@@ -7,18 +7,18 @@ We inline the SVG into a minimal HTML page sized in CSS px and screenshot it.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import subprocess
 import tempfile
 
 from . import svgdoc
+from .executables import require_chrome
 
-CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PT_TO_CSSPX = 96.0 / 72.0  # CSS px is 1/96 inch; svg pt is 1/72 inch
 
 
 def render(svg_path: str, out_png: str, dpi: int = 300) -> dict:
-    if not os.path.exists(CHROME):
-        raise FileNotFoundError(f"Chrome not found at {CHROME}")
+    chrome = require_chrome()
     tree = svgdoc.load(svg_path)
     root = tree.getroot()
     w_pt, h_pt = svgdoc.root_size_pt(root)
@@ -42,16 +42,15 @@ def render(svg_path: str, out_png: str, dpi: int = 300) -> dict:
 
     with tempfile.TemporaryDirectory() as td:
         html_path = os.path.join(td, "fig.html")
-        with open(html_path, "w") as fh:
-            fh.write(html)
+        Path(html_path).write_text(html, encoding="utf-8")
         cmd = [
-            CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+            chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars",
             "--allow-file-access-from-files",
             "--default-background-color=00000000",
             f"--force-device-scale-factor={scale}",
             f"--window-size={win_w},{win_h}",
             f"--screenshot={os.path.abspath(out_png)}",
-            f"file://{html_path}",
+            Path(html_path).resolve().as_uri(),
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if not os.path.exists(out_png):

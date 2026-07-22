@@ -191,6 +191,42 @@ def git_dirty(data_dir: str) -> bool:
     return bool(r.stdout.strip())
 
 
+class GitSyncError(RuntimeError):
+    """A git operation failed while closing the experiment loop."""
+
+
+def _git_error(result: subprocess.CompletedProcess) -> str:
+    return (result.stderr or result.stdout or "unknown git error").strip()
+
+
+def commit_data_dir(data_dir: str, message: str) -> tuple[str, bool]:
+    """Stage and commit ``data_dir`` without mistaking failures for a clean tree.
+
+    Returns ``(head, committed)``.  A clean index is a successful no-op and uses
+    the existing HEAD; every real git failure raises ``GitSyncError`` so callers
+    cannot stamp stale provenance or continue to Mission Control.
+    """
+    added = _git(data_dir, "add", "-A")
+    if added.returncode != 0:
+        raise GitSyncError(f"git add failed: {_git_error(added)}")
+
+    staged = _git(data_dir, "diff", "--cached", "--quiet", "--exit-code")
+    if staged.returncode == 1:
+        committed = _git(data_dir, "commit", "-m", message)
+        if committed.returncode != 0:
+            raise GitSyncError(f"git commit failed: {_git_error(committed)}")
+        made_commit = True
+    elif staged.returncode == 0:
+        made_commit = False
+    else:
+        raise GitSyncError(f"could not inspect staged changes: {_git_error(staged)}")
+
+    head = git_head(data_dir)
+    if not head:
+        raise GitSyncError("git did not provide a HEAD commit")
+    return head, made_commit
+
+
 # ── plan printing ────────────────────────────────────────────────────────────
 def _hdr(execute: bool) -> None:
     mode = "EXECUTE" if execute else "DRY RUN — nothing will change (add -y to run)"
@@ -320,14 +356,16 @@ def main(argv=None) -> int:
         msg = f"sync {eid}: {when}" + (f" — {args.note_text}" if args.note_text else "")
         _do(execute, f'git add -A && git commit -m "{msg}"  (no push)')
         if execute:
-            _git(data_dir, "add", "-A")
-            r = _git(data_dir, "commit", "-m", msg)
-            commit_hash = git_head(data_dir)
-            if r.returncode == 0:
+            try:
+                commit_hash, made_commit = commit_data_dir(data_dir, msg)
+            except GitSyncError as exc:
+                print(f"      ! {exc}")
+                print("\n  Sync stopped: git provenance was not updated.\n")
+                return 1
+            if made_commit:
                 print(f"      ✓ committed {commit_hash}")
             else:
-                # nothing to commit is fine; still record current HEAD
-                print(f"      · {r.stdout.strip() or r.stderr.strip()}")
+                print(f"      · nothing to commit; using current HEAD {commit_hash}")
         if execute and commit_hash:
             update_frontmatter(note, {"git_commit": commit_hash})
             _do(execute, f"frontmatter git_commit → {commit_hash}")

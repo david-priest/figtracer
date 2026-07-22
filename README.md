@@ -4,55 +4,40 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/david-priest/figtracer/actions/workflows/ci.yml/badge.svg)](https://github.com/david-priest/figtracer/actions/workflows/ci.yml)
 
-**Git-tracked lab notes whose figures come from your code — in R and Python.**
+**Change the code. Re-run. Your lab note updates itself.**
 
-*A plain-text, git-native **electronic lab notebook (ELN)** and reproducible-research toolkit for
-bioinformatics: it threads every figure your analysis produces — in R or Python — into a
-version-controlled Markdown lab note with full provenance, no manual copy-paste. Built for
-single-cell and cytometry (CyTOF / mass cytometry / flow) analysis, it works with Obsidian,
-Quarto, Jupyter notebooks, and any Markdown vault. Drop the figure-provenance loop into the
-analysis you already have — or adopt the whole experiment-scaffolding system on top.*
+figtracer is a Git-native figure-to-note loop for R and Python. It connects each rendered
+figure to its analysis source and commit, then keeps one figure block in a plain Markdown lab
+note current—without copy-pasting screenshots.
 
-<sub>Keywords: electronic lab notebook · ELN · reproducible research · research data provenance ·
-bioinformatics · single-cell · flow cytometry · mass cytometry (CyTOF) · R · Python · Quarto ·
-Jupyter · Obsidian · lab notebook software · figure management.</sub>
+```bash
+uv tool install "git+https://github.com/david-priest/figtracer.git"
+figtracer demo
+```
 
-## The problem
+Open `figtracer-demo/Lab note.md`, edit the generated `analysis.py`, and run `figtracer demo`
+again. The figure changes and the existing note block is replaced in place. The first run needs
+no configuration, Obsidian vault, project registry, R, external dataset, Chrome, or Matplotlib.
 
-You run the whole pipeline — cluster, annotate, forty figures — drop them into your lab notes,
-and move on. A week later a collaborator mentions that one sample was mislabelled. You fix one
-line and re-run everything… and now every figure in your notes is silently out of date. So you
-re-export and re-paste them by hand, one by one, hoping you didn't miss any.
+![Before rerunning, a Markdown lab note contains a blue chart connected to its analysis and manifest; after editing the data and rerunning, that same block contains the updated orange chart rather than a duplicate](docs/figtracer-before-after.svg)
 
-**figtracer makes that update disappear.** Every figure is tied to the code and the exact git
-commit that produced it, so when the analysis re-runs, your notes re-sync themselves. Fix the
-label, re-run, done — the figures *and* the record of where each one came from update on their
-own. No re-pasting, nothing silently stale.
+[Take the five-minute tour](docs/GETTING_STARTED.md) or inspect the frozen
+[`examples/minimal`](examples/minimal) output.
 
 ## How it works
 
-It rests on one small contract. Each time you save a figure — from R or Python — one line is
-appended to an append-only `MANIFEST.jsonl`: the figure's title, size, source file, and the exact
-git commit at that moment. figtracer then resolves figures by title, embeds them into a Markdown
-note with a provenance table, and re-syncs that note whenever you re-run — so the note is a
-*derived view* of your analysis, never a hand-duplicated copy. Everything lives as plain text in git.
+It rests on one small contract. Each time you save or register a figure — from R, Python, or an
+external renderer — one line is appended to an append-only `MANIFEST.jsonl`: the figure's title,
+size, source file, generator, and the exact git commit at that moment. figtracer then resolves
+figures by title, embeds them into a Markdown note with a provenance table, and re-syncs that note
+whenever you re-run — so the note is a *derived view* of your analysis, never a hand-duplicated
+copy. Everything lives as plain text in git.
 
 ![figtracer maps out as two tiers: the figure loop you benefit from immediately, and an optional full experiment system on top](docs/figtracer-map.svg)
 
 Start with the figure loop — one function call in the analysis you already have. Reach for the
 rest of the system (experiment scaffolding, protocols, dashboard, close-the-loop `sync`) only if
 and when you want it.
-
-## Two ways to use it
-
-- **Run it yourself** from the terminal — it's a normal CLI (`figtracer <command>`).
-- **Recommended for lab scientists: have [Claude Code](https://claude.com/claude-code) drive it
-  for you.** figtracer ships agent instructions (`AGENTS.md`) so an AI coding assistant can
-  scaffold your experiment, run the analysis, save figures with provenance, and keep your lab
-  notes and dashboard in sync — on your behalf. figtracer was designed to be agent-friendly from
-  the start: everything it touches is plain text, a CLI, and git, so you can describe the
-  experiment in plain language and let it run the machinery. (A conventional electronic lab
-  notebook, being a proprietary GUI, can't be driven this way.)
 
 ## Start small — figures → living notes (the wedge)
 
@@ -72,6 +57,12 @@ from figtracer import savefig
 savefig(fig, title = "umap_level1")          # -> a figure + a MANIFEST line
 ```
 
+```bash
+# Existing SVG/PDF/PNG — preserve its source and generator in the same contract:
+figtracer fig register method_flow.svg --title fixation_method_flow \
+  --source-kind generated-svg --generator "python render_method_flow.py"
+```
+
 Then the figure is provenance-tracked and the note follows the latest render:
 
 - `figtracer fig embed <spec.yaml>` — compose panels into a figure and write it into a note
@@ -81,7 +72,9 @@ Then the figure is provenance-tracked and the note follows the latest render:
   missing figure.
 
 Embeds are **portable by default** (standard Markdown / HTML, so they render anywhere);
-`--link-style obsidian` gives Obsidian wikilinks with the native resize handle.
+`--link-style obsidian` gives Obsidian wikilinks with the native resize handle. A Python analysis
+must have `figtracer` installed in its own environment; command-line tools installed by `uv tool`
+are intentionally isolated.
 
 **See it on real public data:** [`examples/cytof`](examples/cytof) analyses two public CyTOF
 datasets — one in R (`seekit`), one in Python (`scanpy`) — and threads figures from **both**
@@ -89,75 +82,88 @@ into one lab note. That is the whole idea, end to end, on data anyone can downlo
 
 ## Go further — the full experiment system (opt-in)
 
-If you want more than the figure loop, figtracer is also a complete, plain-text experiment
-manager. None of this is required to use the wedge above.
+If you want more than the figure loop, figtracer can also scaffold experiments, render bench
+protocols, maintain a Mission Control dashboard, and close out a session. None of this is
+required for the five-minute demo or the save-side figure seam.
 
-```
+```text
 figtracer new       scaffold a fully cross-linked experiment: notes + data/analysis/outputs dirs
 figtracer index     rebuild a project's Mission Control dashboard (every experiment by status)
-figtracer protocol  render a bench protocol.yaml -> a printable sheet + a Markdown shadow
+figtracer protocol  call an experiment-local renderer for protocol.yaml (legacy wrapper)
 figtracer data      a content-addressed registry of analysis objects (.qs2/.rds/.RData)
 figtracer doctor    profile-aware QMD checks for internal, collaborator, and publication views
 figtracer sync      end-of-session roundup: figures -> note -> dashboard -> git commit
 figtracer export    a clean collaborator-facing PDF of an experiment's notes
 ```
 
-`labkit` (scaffolding + Mission Control) and `figtools` (figure assembly) also ship as
-standalone console scripts; `figtracer` is a convenience front door over them.
+Follow the [full experiment-system setup](docs/FULL_SYSTEM.md) when you want that layer. The
+current protocol command is a bring-your-own-renderer wrapper; packaging a general protocol
+renderer remains future work.
+`labkit` (scaffolding + Mission Control) and `figtools` (figure assembly) also ship as standalone
+console scripts; `figtracer` is a convenience front door over them. The
+[analysis doctor](docs/ANALYSIS_DOCTOR.md) gives humans, agents, and CI a named, suppressible
+checklist while keeping one detailed internal QMD as the source of truth.
 
-The [analysis doctor](docs/ANALYSIS_DOCTOR.md) gives humans, agents, and CI a named,
-suppressible checklist while keeping one detailed internal QMD as the source of truth.
+## When figtracer fits
 
-## How figtracer compares
+figtracer is a good fit when:
 
-figtracer fills a specific gap: **a lab notebook whose figures are generated by your code,
-tracked in git, and stay in sync — that you can drop into an existing analysis in one line, or
-hand to an AI assistant to run.** It is not a sample/inventory system (LIMS) and does not try to
-replace an electronic lab notebook's compliance features; it wins on the *computational* record.
+- analysis happens in R or Python and figures change as the code changes;
+- the durable record should be readable Markdown, YAML, SVG, and JSONL in git;
+- figures from multiple scripts or languages need to converge on one note;
+- you want to add provenance without moving the analysis into a new notebook platform; or
+- stale pasted figures and unclear source files are the recurring problem to solve.
 
-| | figtracer | Commercial ELN (Benchling, LabArchives) | Open-source ELN (eLabFTW) | Evernote / Notion | PowerPoint | Literate docs (Quarto, Jupyter) |
-|---|---|---|---|---|---|---|
-| Record format | plain-text Markdown/YAML in **git** | proprietary cloud DB | DB / self-host | proprietary | proprietary binary | rendered document |
-| **Figures ↔ code** | **linked to source file + commit, auto-resync** | detached upload | detached upload | manual paste (goes stale) | manual paste (goes stale) | inline, same document only |
-| **Cross-language (R + Python)** | **both → one note** | — | — | — | — | one language per document |
-| **Fits your existing analysis** | **one function call, any layout** | no (separate app) | no (separate app) | no (separate app) | no (separate app) | restructure into notebooks |
-| **Agent-operable** | **yes — ships `AGENTS.md`** | no (proprietary GUI) | no | no | no | partial |
-| Version control | native git, everything | app-internal, lossy export | app-internal | none / manual | none | the document only |
-| Cost / lock-in | free, MIT, no lock-in | subscription, vendor-owned | free / self-host | freemium | licensed | free |
+It is not the right primary tool when:
 
-The bold rows are where figtracer is unique: **code↔figure provenance that resyncs, across R and
-Python, dropped into the workflow you already have, and operable by an AI assistant.** Evernote,
-Notion and PowerPoint are where a lot of lab figures actually live today — pasted in by hand,
-with no link back to the code and no version history; that is exactly the gap figtracer closes.
+- you need regulated ELN controls, electronic signatures, audit certification, or validated
+  compliance workflows;
+- you need a LIMS for sample inventory, freezer locations, instruments, or chain of custody;
+- your team requires a GUI-only, no-code workflow; or
+- the analysis and its notes should not live in files or git.
 
-## Install (for use)
+figtracer can sit beside an ELN or LIMS; it does not claim to replace those systems. Its narrow
+job is to keep code-generated figures, provenance, and Markdown notes connected.
+
+## Optional: let a coding agent operate it
+
+Everything figtracer touches is plain text, a documented CLI, and git, so a coding agent can run
+the same workflow on your behalf. The repository ships [`AGENTS.md`](AGENTS.md) instructions for
+that use. Agent operation is optional: every command and artifact remains directly inspectable
+and usable by a person at the terminal.
+
+## Install notes
+
+The quick start installs the CLI with `uv tool`. Update it later with:
 
 ```bash
-pipx install "git+https://github.com/david-priest/figtracer.git"
-figtracer init --vault-root "/path/to/your/Obsidian/LabNotes"   # one-time, per machine
+uv tool upgrade figtracer
 ```
 
-Update later with `pipx upgrade figtracer`. Data dirs (journal profiles, note templates) ship
-inside the wheel. **New here? Start with the [10-minute getting-started guide](docs/GETTING_STARTED.md).**
+For `from figtracer import savefig`, install the package into the environment that runs your
+Python analysis too. See the [five-minute guide](docs/GETTING_STARTED.md) for a local-clone
+example.
 
-## Install (development)
+## Development
 
 ```bash
+git clone https://github.com/david-priest/figtracer.git
 cd figtracer
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
 ```
 
 ## Layout
 
-```
-figtracer/      umbrella package (cli, sync, protocol, savefig, data, export)
-labkit/        experiment scaffolding + Mission Control + ingest   (+ templates/, config/)
-figtools/      figure assembly, embed, doctor                      (+ config/journals.yaml)
-r/             figtracer.R — the dependency-free R saveFig() shim
-examples/      runnable public-data example (cytof: R + Python -> one note)
-docs/          getting-started + protocol docs
+```text
+figtracer/      umbrella package (CLI, sync, protocol, savefig, data, export)
+labkit/         experiment scaffolding + Mission Control + ingest (+ templates, config)
+figtools/       figure assembly, embed, and integrity checks
+r/              dependency-free R saveFig() shim
+examples/       minimal zero-data demo snapshot + public-data CyTOF example
+docs/           five-minute start, optional full setup, and subsystem guides
 ```
 
 ## License

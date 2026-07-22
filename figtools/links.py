@@ -11,7 +11,7 @@ existing wikilink vault stays fully recognised after switching the writer to mar
 from __future__ import annotations
 
 import re
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 STYLES = ("markdown", "html", "obsidian")
 
@@ -43,5 +43,12 @@ def embed_pattern(name_re: str) -> re.Pattern:
 
 
 def embed_filename(m: re.Match) -> str:
-    """The `.png` filename captured by an [embed_pattern] match, whatever the style."""
-    return m.group("wl") or m.group("md") or m.group("html")
+    """The canonical `.png` filename captured by an [embed_pattern] match.
+
+    Markdown and HTML targets are URLs, so their captured filenames are percent-
+    decoded once. Obsidian wikilinks are filesystem-style links and stay literal.
+    """
+    wikilink = m.group("wl")
+    if wikilink is not None:
+        return wikilink
+    return unquote(m.group("md") or m.group("html"))

@@ -1,4 +1,4 @@
-"""figtools CLI. Subcommands: inspect, normalize, assemble, check, render, optimise."""
+"""figtools CLI. Subcommands for registering, composing, checking and rendering figures."""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +8,16 @@ import sys
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="figtools", description="SVG multipanel figure tooling")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    preg = sub.add_parser("register", help="register an existing figure in MANIFEST.jsonl")
+    preg.add_argument("figure", help="existing SVG, PDF or PNG")
+    preg.add_argument("--title", help="stable figure title (default: source filename stem)")
+    preg.add_argument("--outputs", help="outputs directory containing MANIFEST.jsonl")
+    preg.add_argument("--channel", default="note", help="consumer channel (default: note)")
+    preg.add_argument("--no-embed", action="store_true", help="record with embed=false")
+    preg.add_argument("--source-kind", default="external-file",
+                      help="provenance category, e.g. generated-svg or illustrator")
+    preg.add_argument("--generator", help="script or command that generated the source")
 
     pi = sub.add_parser("inspect", help="structural DOM summary of a panel SVG")
     pi.add_argument("svg")
@@ -110,6 +120,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.cmd == "register":
+        from . import register
+        return register.run(args)
     if args.cmd == "inspect":
         from . import inspect_cmd
         return inspect_cmd.run(args)

@@ -1,8 +1,9 @@
-"""figtracer figsync — keep Obsidian lab-note figures in sync with the latest f2 render.
+"""figtracer figsync — keep Obsidian lab-note figures in sync with the latest registered render.
 
-The qmd (+ its `MANIFEST.jsonl`) is the single source of truth; the vault note is a
-derived presentation layer. figsync resolves each figure's latest render from the
-MANIFEST and overwrites the **stable PNG** the note already embeds
+The figure source (+ its `MANIFEST.jsonl`) is the source of truth; the vault note
+is a derived presentation layer. The source can be an f2/qmd export, a Python
+savefig call, or a file registered from another renderer. figsync resolves each
+figure's latest render from the MANIFEST and overwrites the **stable PNG** the note embeds
 (`<exp>_<title>.png`) — the note prose is never touched. Provenance goes in a
 separate auto-generated index note.
 
@@ -14,8 +15,8 @@ separate auto-generated index note.
 Design notes:
 - **Stable filename, never dated** in the embed -> note text never churns; history
   lives in git + the dated f2 originals.
-- **Note-driven + embed-flagged**: only figures BOTH flagged `embed = TRUE` in f2()
-  AND actually placed in a note are materialized (no orphan PNGs).
+- **Note-driven + embed-flagged**: only figures BOTH flagged `embed = TRUE` in their
+  manifest entry AND actually placed in a note are materialized (no orphan PNGs).
 - **--committed-only** resolves "latest" to the newest *git-committed* render
   (via MANIFEST `git_commit`), so a synced note points at a reproducible figure.
 - **drift** reports the two failure modes that rot quietly: note embeds that match
@@ -48,18 +49,33 @@ def _key(e):
 
 
 def _manifests(analysis_dir: str) -> list[str]:
-    # new layout: single outputs/MANIFEST.jsonl ; old: one per dated folder
-    m = set(glob.glob(os.path.join(analysis_dir, "outputs", "MANIFEST.jsonl")))
-    m |= set(glob.glob(os.path.join(analysis_dir, "*", "MANIFEST.jsonl")))
+    # f2 writes to `here("outputs")` — the here-root's outputs/. That root is the
+    # experiment folder (where its .git/.here/.Rproj marker sits), but `data_dir`
+    # (from note frontmatter) usually points DEEPER, at experiment/data/. So walk UP
+    # from analysis_dir looking for outputs/MANIFEST.jsonl, stopping at the first
+    # project-root marker. Walking up (never sideways) and only globbing each
+    # ancestor's own outputs/ means we can never pull in a SIBLING experiment's
+    # MANIFEST; the marker stop keeps us from escaping the experiment on the rare
+    # layout with no closer marker.
+    m: set[str] = set()
+    d = os.path.normpath(os.path.abspath(analysis_dir))
+    for _ in range(6):  # generous bound; real depth is 1–2
+        m |= set(glob.glob(os.path.join(d, "outputs", "MANIFEST.jsonl")))  # new layout
+        if any(os.path.exists(os.path.join(d, mk)) for mk in (".git", ".here")) \
+                or glob.glob(os.path.join(d, "*.Rproj")):
+            break
+        parent = os.path.dirname(d)
+        if parent == d:  # filesystem root
+            break
+        d = parent
+    m |= set(glob.glob(os.path.join(analysis_dir, "*", "MANIFEST.jsonl")))  # legacy: per dated folder
     return sorted(m)
 
 
 def _rasterizable(e) -> bool:
-    """A render figsync can materialise into a PNG (copy or pdftoppm). SVG (and any
-    other format) is NOT rasterizable here — this is the guard that stops a newer
-    figtools .svg from shadowing a note figure's .pdf."""
+    """A render figsync can materialise into a stable note PNG."""
     p = (e.get("_path") or "").lower()
-    return p.endswith(".pdf") or p.endswith(".png")
+    return p.endswith(".pdf") or p.endswith(".png") or p.endswith(".svg")
 
 
 def _load_versions(analysis_dir: str) -> dict:
@@ -97,8 +113,8 @@ def resolve_figures(analysis_dir: str, committed_only: bool = False,
     considered, so a figtools "panel" render can never shadow a "note" figure.
 
     Within the channel: prefer the newest render that figsync can rasterise
-    (pdf/png), falling back to any existing render (e.g. svg) only if no pdf/png
-    exists. Note figures always emit a pdf, so this restores them past a newer svg.
+    (svg/pdf/png), falling back to any existing render only if no supported format
+    exists.
     With committed_only, prefer entries carrying a git_commit (reproducible).
     Sets _missing when nothing exists on disk."""
     versions = _load_versions(analysis_dir)
@@ -218,8 +234,8 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
                 tag = "DANGLING (title ok, no on-disk render)"
             elif attach is not None and not os.path.exists(
                     os.path.join(attach, _attachment_name(eid, slug, "note"))):
-                # resolvable but the attachment PNG isn't on disk: an unrasterizable
-                # render (svg) or a sync that FAILed. Must NOT read "ok".
+                # Resolvable but the attachment PNG isn't on disk: sync has not run
+                # or rasterization failed. Must NOT read "ok".
                 tag = "NOT MATERIALISED (run figsync sync)"
                 not_mat += 1
             else:
@@ -228,7 +244,7 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
             tag = "AWAITING RE-RUN (f2 embed=TRUE exists; not yet rendered)"
             awaiting += 1
         else:
-            tag = "ORPHAN (no f2 source — manual fig, or needs embed=TRUE/rename)"
+            tag = "ORPHAN (no registered source — register it, or fix embed/rename)"
             orphan += 1
         print(f"  [{tag}]  {slug}  ({where})")
     unplaced = sorted(embed_titles - set(ref))
@@ -237,7 +253,7 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
         print(f"  UNPLACED  {t}")
     print(f"\nsummary: {len(ref)} embeds — {awaiting} awaiting re-run, "
           f"{not_mat} not materialised (run sync), "
-          f"{orphan} orphaned (no f2 source), {len(unplaced)} unplaced")
+          f"{orphan} orphaned (no registered source), {len(unplaced)} unplaced")
 
 
 def _attachment_name(eid: str, title: str, channel: str = "note") -> str:
@@ -254,8 +270,12 @@ def _rasterize(src: str, dst: str, dpi: int = 300) -> None:
     if low.endswith(".png"):
         shutil.copy(src, dst)
         return
+    if low.endswith(".svg"):
+        from figtools import render
+        render.render(src, dst, dpi=dpi)
+        return
     if not low.endswith(".pdf"):
-        raise ValueError(f"can't rasterize non-PDF/PNG source: {src}")
+        raise ValueError(f"can't rasterize non-SVG/PDF/PNG source: {src}")
     stem = dst[:-4] if dst.lower().endswith(".png") else dst
     subprocess.run(["pdftoppm", "-r", str(dpi), "-png", "-singlefile", src, stem], check=True)
 
@@ -270,15 +290,19 @@ def _write_provenance(eid: str, note_dir: str, mat: dict, ref: dict | None = Non
     lines = ["---", "title: Figure provenance", "---", "",
              f"# {eid} — Figure provenance (auto-generated)", "",
              "> [!info] Auto-generated by `figtracer figsync` — do not edit by hand. Each row",
-             "> ties an embedded figure to the note it appears in + the f2() render + qmd chunk",
-             "> + git commit it was rendered from.", "",
-             "| note figure | embedded in | rendered | git commit | qmd chunk | source file |",
-             "| --- | --- | --- | --- | --- | --- |"]
+             "> ties an embedded figure to the note it appears in, its registered source and",
+             "> generator, and the git commit it was rendered from.", "",
+             "| note figure | embedded in | rendered | git commit | source | generator | registered file |",
+             "| --- | --- | --- | --- | --- | --- | --- |"]
     for t in sorted(mat):
         e = mat[t]
         where = ", ".join(f"[[{os.path.splitext(n)[0]}]]" for n in sorted(set(ref.get(t, [])))) or "—"
+        source = e.get("source_path") or e.get("qmd_path") or "—"
+        if e.get("source_kind"):
+            source += f" ({e['source_kind']})"
+        generator = e.get("generator") or e.get("tool") or "—"
         lines.append(f"| `{eid}_{t}.png` | {where} | {e.get('saved_at', '')} | "
-                     f"`{e.get('git_commit') or '-'}` | `{e.get('chunk_label') or '-'}` | "
+                     f"`{e.get('git_commit') or '-'}` | {source} | `{generator}` | "
                      f"{os.path.basename(e.get('_path', ''))} |")
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -388,7 +412,7 @@ def _render_siblings(fig_path: str) -> list[str]:
     swept in. The .rmd/_sessioninfo.txt session snapshots do NOT share this stem
     and are never touched."""
     stem, _ = os.path.splitext(fig_path)
-    cands = [stem + s for s in (".pdf", ".png", ".RData", "_data.xlsx")]
+    cands = [fig_path] + [stem + s for s in (".pdf", ".png", ".RData", "_data.xlsx")]
     return [p for p in cands if os.path.exists(p)]
 
 
@@ -419,9 +443,8 @@ def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False) -
     intact (append-only provenance; resolve_figures tolerates the now-dangling
     entries). Returns a summary; moves files to Trash only when execute=True.
 
-    Guard: the newest rasterizable (pdf/png) render of a channel is NEVER trashed,
-    even if it sorts beyond `keep`. This is exactly the case that deleted the note
-    PDFs — a newer non-rasterizable svg pushed the pdf past the keep window."""
+    Guard: the newest rasterizable (svg/pdf/png) render of a channel is NEVER
+    trashed, even if it sorts beyond `keep`."""
     versions = _load_versions(analysis_dir)
     drop, per_title = [], []
     for (ch, t), vs in versions.items():
@@ -469,7 +492,7 @@ def cmd_prune(analysis_dir, keep, execute) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="figtracer figsync",
-                                 description="Sync lab-note figures to the latest f2 render.")
+                                 description="Sync lab-note figures to the latest registered render.")
     ap.add_argument("action", choices=["index", "drift", "sync", "place", "prune"])
     ap.add_argument("title", nargs="?", help="figure title (for `place`)")
     ap.add_argument("--exp", help="experiment_id (default: resolve from current directory)")

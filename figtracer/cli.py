@@ -2,6 +2,7 @@
 
 `figtracer <command> [args]` forwards to the right tool:
 
+  demo                   -> figtracer.demo      (zero-config figure-to-note tour)
   new / index / init     -> labkit
   fig <sub>              -> figtools
   protocol               -> figtracer.protocol  (renders an experiment's protocol.yaml)
@@ -19,13 +20,16 @@ USAGE = """figtracer — reproducible-analysis machinery, one front door
 
 usage: figtracer <command> [args]
 
+  start here
+    demo          build a zero-config analysis -> figure -> living Markdown note
+
   experiment lifecycle (labkit)
     new           scaffold a fully cross-linked experiment
     index         rebuild a project's Mission Control dashboard
     init          write the per-machine user config
 
   figures (figtools)
-    fig <sub>     inspect | normalize | assemble | check | render | verify | embed | watch | optimise | doctor
+    fig <sub>     register | inspect | normalize | assemble | check | render | verify | embed | watch | optimise | doctor
 
   protocols
     protocol      render protocol.yaml -> xlsx + shadow.md
@@ -60,6 +64,10 @@ def main(argv=None) -> int:
         return 0
 
     cmd, rest = argv[0], argv[1:]
+
+    if cmd == "demo":
+        from figtracer import demo
+        return demo.main(rest)
 
     if cmd in ("new", "index", "init"):
         from labkit.cli import main as labkit_main

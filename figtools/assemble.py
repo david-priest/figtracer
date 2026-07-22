@@ -176,6 +176,10 @@ def assemble(spec: dict, out: str) -> dict:
             "qmd": os.path.basename(meta.qmd_path) if meta and meta.qmd_path else None,
             "chunk": meta.chunk_label if meta else None,
             "git_commit": meta.git_commit if meta else None,
+            "source_path": meta.source_path if meta else None,
+            "source_kind": meta.source_kind if meta else None,
+            "generator": meta.generator if meta else None,
+            "tool": meta.tool if meta else None,
         })
 
     # ---- journal-compliance fixes (presentation only; geometry untouched) ----

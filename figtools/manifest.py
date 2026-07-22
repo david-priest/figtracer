@@ -1,7 +1,8 @@
 """Resolve figure panels to exported files via f2()'s MANIFEST.jsonl.
 
 Each MANIFEST.jsonl line (one dated export folder) looks like:
-  {"fig": "2026-..._<title>.svg", "title": "<title>", "fig_format": "svg",
+  {"fig": "2026-..._<title>.svg", "rel_path": "<dated>/2026-..._<title>.svg",
+   "title": "<title>", "fig_format": "svg",
    "width_in": 12, "height_in": 6, "timestamp": "...", "saved_at": "ISO8601", ...}
 We index by title and keep the most recent export, so re-running a chunk transparently
 updates which file the assembler picks up (the living-document property).
@@ -25,6 +26,10 @@ class Panel:
     git_commit: str | None
     qmd_path: str | None = None      # provenance: which analysis source produced it
     chunk_label: str | None = None   # provenance: which chunk
+    source_path: str | None = None   # provenance for an already-created figure
+    source_kind: str | None = None
+    generator: str | None = None
+    tool: str | None = None
 
 
 def _iter_entries(manifest_path: str):
@@ -38,7 +43,9 @@ def _iter_entries(manifest_path: str):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            fig = rec.get("fig")
+            # seekit's f2()/saveFig() records keep `fig` as a basename and put the
+            # dated subfolder in `rel_path`. Older manifests only have `fig`.
+            fig = rec.get("rel_path") or rec.get("fig")
             if not fig:
                 continue
             yield rec, os.path.join(folder, fig)
@@ -58,6 +65,8 @@ def load_index(manifest_path: str, prefer_format: str = "svg") -> dict[str, Pane
             saved_at=rec.get("saved_at", rec.get("timestamp", "")),
             git_commit=rec.get("git_commit"),
             qmd_path=rec.get("qmd_path"), chunk_label=rec.get("chunk_label"),
+            source_path=rec.get("source_path"), source_kind=rec.get("source_kind"),
+            generator=rec.get("generator"), tool=rec.get("tool"),
         )
         cur = best.get(key)
         if cur is None or p.saved_at >= cur.saved_at:

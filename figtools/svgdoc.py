@@ -209,20 +209,45 @@ def geom_signature(el) -> str | None:
     return "|".join(parts)
 
 
-def is_full_canvas(el, vb, w_pt: float, h_pt: float) -> bool:
-    """True if a <rect> spans (≈) the whole canvas (width='100%' or ≈ viewBox dims)."""
-    w = (el.get("width") or "").strip()
-    h = (el.get("height") or "").strip()
-    if w == "100%" or h == "100%":
-        return True
-    m = _NUM_RE.match(w)
-    n = _NUM_RE.match(h)
-    if not m or not n:
+def _canvas_value(value: str | None, extent: float, default: float | None = None) -> float | None:
+    """Parse a bare/percentage SVG coordinate in canvas user units.
+
+    Unsupported units are deliberately rejected: a cleanup predicate should keep an
+    uncertain rectangle rather than guess that it spans the canvas.
+    """
+    if value is None or not value.strip():
+        return default
+    raw = value.strip()
+    if raw.endswith("%"):
+        m = _NUM_RE.fullmatch(raw[:-1].strip())
+        return float(m.group()) * extent / 100.0 if m else None
+    m = _NUM_RE.fullmatch(raw)
+    return float(m.group()) if m else None
+
+
+def is_full_canvas(el, vb, w_pt: float, h_pt: float, tolerance_frac: float = 0.03) -> bool:
+    """True only when a <rect> covers (≈) the whole canvas in both dimensions.
+
+    Size alone is insufficient: a canvas-sized rectangle shifted away from an edge is
+    partial too. Unknown units fail closed so clip/background cleanup preserves the rect.
+    """
+    cx, cy, cw, ch = vb if vb else (0.0, 0.0, w_pt, h_pt)
+    if cw <= 0 or ch <= 0:
         return False
-    wv, hv = float(m.group()), float(n.group())
-    cw = vb[2] if vb else w_pt
-    ch = vb[3] if vb else h_pt
-    return wv >= 0.97 * cw and hv >= 0.97 * ch
+    x = _canvas_value(el.get("x"), cw, default=0.0)
+    y = _canvas_value(el.get("y"), ch, default=0.0)
+    w = _canvas_value(el.get("width"), cw)
+    h = _canvas_value(el.get("height"), ch)
+    if None in (x, y, w, h):
+        return False
+    tol_x = max(0.0, tolerance_frac) * cw
+    tol_y = max(0.0, tolerance_frac) * ch
+    return (
+        w >= cw - tol_x and h >= ch - tol_y
+        and x <= cx + tol_x and y <= cy + tol_y
+        and x + w >= cx + cw - tol_x
+        and y + h >= cy + ch - tol_y
+    )
 
 
 def text_signature(el) -> str | None:

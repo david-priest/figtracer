@@ -6,6 +6,12 @@ All notable changes to figtracer are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- `figtracer fig register` brings existing SVG/PDF/PNG artifacts from scripted or external
+  renderers into the same append-only MANIFEST, git-provenance, and LabNotes embed loop as
+  `f2()` and `figtracer.savefig()`; `figsync` can now materialize registered SVGs directly.
+
 ## [0.1.0] — unreleased
 
 First tagged release. figtracer bundles an umbrella CLI plus `labkit` and `figtools` into

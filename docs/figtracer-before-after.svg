@@ -1,0 +1,82 @@
+<svg viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <title>Change analysis code, rerun figtracer, and the existing lab-note figure updates</title>
+  <desc>An initial blue chart and its provenance appear in a Markdown lab note. After the data and colour are edited and figtracer demo is rerun, the same marked note block contains an updated orange chart and provenance instead of a duplicate.</desc>
+
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrowhead" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+      <path d="M0,0 L10,6 L0,12 Z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="630" rx="24" fill="#f8fafc"/>
+  <text x="600" y="42" text-anchor="middle" font-size="25" font-weight="750" fill="#0f172a">Change the code. Re-run. The same lab-note block updates.</text>
+  <text x="600" y="68" text-anchor="middle" font-size="14" fill="#64748b">Analysis, figure, manifest, and Markdown stay connected</text>
+
+  <!-- Before -->
+  <rect x="34" y="92" width="490" height="494" rx="18" fill="#ffffff" stroke="#cbd5e1" filter="url(#shadow)"/>
+  <rect x="34" y="92" width="490" height="48" rx="18" fill="#eaf2ff"/>
+  <rect x="34" y="122" width="490" height="18" fill="#eaf2ff"/>
+  <circle cx="57" cy="116" r="6" fill="#3b82f6"/>
+  <text x="73" y="122" font-size="15" font-weight="700" fill="#1e3a8a">BEFORE · first run</text>
+
+  <rect x="55" y="158" width="448" height="88" rx="10" fill="#0f172a"/>
+  <text x="72" y="181" font-size="11" font-weight="700" fill="#93c5fd">analysis.py</text>
+  <text x="72" y="203" font-family="Menlo, Consolas, monospace" font-size="12" fill="#e2e8f0">DATA = [12, 19, 15]</text>
+  <text x="72" y="224" font-family="Menlo, Consolas, monospace" font-size="12" fill="#e2e8f0">BAR_COLOR = "#2563eb"</text>
+  <rect x="240" y="212" width="12" height="12" rx="3" fill="#2563eb"/>
+
+  <rect x="55" y="263" width="448" height="298" rx="12" fill="#ffffff" stroke="#dbe3ee"/>
+  <text x="75" y="292" font-size="13" font-weight="700" fill="#334155">Lab note.md</text>
+  <line x1="75" y1="304" x2="483" y2="304" stroke="#e2e8f0"/>
+  <text x="75" y="330" font-size="14" font-weight="700" fill="#0f172a">Cells recovered by condition</text>
+  <line x1="92" y1="470" x2="462" y2="470" stroke="#94a3b8"/>
+  <rect x="111" y="385" width="76" height="85" rx="5" fill="#2563eb"/>
+  <rect x="241" y="335" width="76" height="135" rx="5" fill="#2563eb"/>
+  <rect x="371" y="363" width="76" height="107" rx="5" fill="#2563eb"/>
+  <text x="149" y="491" text-anchor="middle" font-size="10" fill="#475569">Control</text>
+  <text x="279" y="491" text-anchor="middle" font-size="10" fill="#475569">Treatment</text>
+  <text x="409" y="491" text-anchor="middle" font-size="10" fill="#475569">Recovery</text>
+  <rect x="75" y="512" width="408" height="31" rx="6" fill="#f1f5f9"/>
+  <text x="89" y="532" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#475569">analysis.py  ·  MANIFEST.jsonl  ·  git commit</text>
+
+  <!-- Re-run arrow -->
+  <line x1="548" y1="318" x2="650" y2="318" stroke="#475569" stroke-width="3" marker-end="url(#arrowhead)"/>
+  <rect x="543" y="264" width="114" height="34" rx="17" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="600" y="286" text-anchor="middle" font-size="12" font-weight="700" fill="#334155">edit + re-run</text>
+  <text x="600" y="349" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#475569">figtracer demo</text>
+
+  <!-- After -->
+  <rect x="676" y="92" width="490" height="494" rx="18" fill="#ffffff" stroke="#86efac" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="676" y="92" width="490" height="48" rx="18" fill="#ecfdf5"/>
+  <rect x="676" y="122" width="490" height="18" fill="#ecfdf5"/>
+  <circle cx="699" cy="116" r="6" fill="#16a34a"/>
+  <text x="715" y="122" font-size="15" font-weight="700" fill="#166534">AFTER · same note, updated</text>
+  <rect x="1011" y="104" width="132" height="24" rx="12" fill="#dcfce7"/>
+  <text x="1077" y="121" text-anchor="middle" font-size="11" font-weight="700" fill="#166534">ONE FIGURE BLOCK</text>
+
+  <rect x="697" y="158" width="448" height="88" rx="10" fill="#0f172a"/>
+  <text x="714" y="181" font-size="11" font-weight="700" fill="#fdba74">analysis.py</text>
+  <text x="714" y="203" font-family="Menlo, Consolas, monospace" font-size="12" fill="#e2e8f0">DATA = [12, 24, 21]</text>
+  <text x="714" y="224" font-family="Menlo, Consolas, monospace" font-size="12" fill="#e2e8f0">BAR_COLOR = "#ea580c"</text>
+  <rect x="882" y="212" width="12" height="12" rx="3" fill="#ea580c"/>
+
+  <rect x="697" y="263" width="448" height="298" rx="12" fill="#ffffff" stroke="#bbf7d0"/>
+  <text x="717" y="292" font-size="13" font-weight="700" fill="#334155">Lab note.md</text>
+  <text x="1124" y="292" text-anchor="end" font-size="11" font-weight="700" fill="#15803d">block replaced in place</text>
+  <line x1="717" y1="304" x2="1125" y2="304" stroke="#dcfce7"/>
+  <text x="717" y="330" font-size="14" font-weight="700" fill="#0f172a">Cells recovered after treatment</text>
+  <line x1="734" y1="470" x2="1104" y2="470" stroke="#94a3b8"/>
+  <rect x="753" y="402" width="76" height="68" rx="5" fill="#ea580c"/>
+  <rect x="883" y="334" width="76" height="136" rx="5" fill="#ea580c"/>
+  <rect x="1013" y="351" width="76" height="119" rx="5" fill="#ea580c"/>
+  <text x="791" y="491" text-anchor="middle" font-size="10" fill="#475569">Control</text>
+  <text x="921" y="491" text-anchor="middle" font-size="10" fill="#475569">Treatment</text>
+  <text x="1051" y="491" text-anchor="middle" font-size="10" fill="#475569">Recovery</text>
+  <rect x="717" y="512" width="408" height="31" rx="6" fill="#f0fdf4"/>
+  <text x="731" y="532" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#166534">analysis.py  ·  MANIFEST.jsonl  ·  git commit</text>
+
+  <text x="600" y="615" text-anchor="middle" font-size="12" fill="#64748b">Your prose stays untouched; figtracer owns only the marked figure block.</text>
+</svg>

@@ -17,6 +17,7 @@ Everything here is pure and unit-tested; the filesystem/CLI shell lives in ``dat
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -27,7 +28,7 @@ HASH_CACHE = os.path.join(".figtracer", "cache", "hashes.json")
 SCHEMA_VERSION = 1
 
 _EXTS = {".qs2": "qs2", ".rds": "rds", ".RData": "RData", ".rdata": "RData"}
-# user-owned fields carried across re-scans, keyed by object hash
+# user-owned fields carried across re-scans, keyed by object path + hash
 _USER_FIELDS = ("canonical", "public", "notes")
 # trailing timestamp tokens R/CyTOFXT stamp onto filenames (…_20260623_183927, …_193749)
 _TS = re.compile(r"(_\d{6,8}){1,2}$")
@@ -55,6 +56,27 @@ def _norm_stem(path: str) -> str:
 
 def _stem(path: str) -> str:
     return os.path.splitext(os.path.basename(path))[0]
+
+
+def _identity_path(path: str) -> str:
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _unique_name(base: str, hash_: str, path: str, taken: set[str]) -> str:
+    """Return a stable-enough unique logical name without collapsing exact copies."""
+    if base not in taken:
+        return base
+    digest = hash_.split(":")[-1][:6] or "object"
+    candidate = f"{base}__{digest}"
+    if candidate not in taken:
+        return candidate
+    path_digest = hashlib.sha1(_identity_path(path).encode("utf-8")).hexdigest()[:6]
+    candidate = f"{base}__{digest}_{path_digest}"
+    n = 2
+    while candidate in taken:
+        candidate = f"{base}__{digest}_{path_digest}_{n}"
+        n += 1
+    return candidate
 
 
 # ── the record ────────────────────────────────────────────────────────────────
@@ -149,15 +171,26 @@ def reconcile(fs_records, jsonl_records, *, base_dir, prev=None, experiment_id=N
     * ``jsonl_records`` : list of parsed ``OBJECTS.jsonl`` dicts (may be []).
     * ``prev``          : the previously-written lockfile dict — its user-owned fields
                           (canonical / public / notes, and a duplicate group's
-                          ``resolution``) are carried forward, keyed by hash, so a
-                          re-scan never clobbers a ``bless``.
+                          ``resolution``) are carried forward. Physical copies use
+                          path+hash identity so exact duplicates remain independently
+                          blessable; a single moved file may fall back to hash identity.
     Records merge by hash; the JSONL side supplies provenance/summary/lineage, the FS
     side supplies the authoritative on-disk path/size/format.
     """
     prev = prev or {}
-    prev_user = {r.hash: r for r in records_from_lock(prev).values()}
+    prev_records = list(records_from_lock(prev).values())
+    prev_by_identity = {
+        (r.hash, _identity_path(r.path)): r for r in prev_records
+    }
+    prev_by_hash: dict[str, list[ObjectRecord]] = {}
+    for r in prev_records:
+        prev_by_hash.setdefault(r.hash, []).append(r)
     prev_res = {tuple(sorted(g.get("hashes", []))): g.get("resolution", "pending")
                 for g in prev.get("duplicates", [])}
+
+    current_hash_counts: dict[str, int] = {}
+    for fr in fs_records:
+        current_hash_counts[fr["hash"]] = current_hash_counts.get(fr["hash"], 0) + 1
 
     # newest JSONL record per hash
     jl: dict[str, dict] = {}
@@ -168,19 +201,19 @@ def reconcile(fs_records, jsonl_records, *, base_dir, prev=None, experiment_id=N
         jl[h] = _newest(jl[h], rec) if h in jl else rec
 
     objects: dict[str, ObjectRecord] = {}
-    taken: dict[str, str] = {}  # logical name -> hash, to disambiguate collisions
+    taken: set[str] = set()
 
     for fr in sorted(fs_records, key=lambda r: r["path"]):
         h = fr["hash"]
         j = jl.get(h, {})
-        name = j.get("name") or _stem(fr["path"])
-        if name in taken and taken[name] != h:
-            name = f"{name}__{h.split(':')[-1][:6]}"
-        taken[name] = h
+        rel_path = to_rel(fr["path"], base_dir)
+        base_name = str(j.get("name") or _stem(fr["path"]))
+        name = _unique_name(base_name, h, rel_path, taken)
+        taken.add(name)
 
         rec = ObjectRecord(
             name=name, hash=h,
-            path=to_rel(fr["path"], base_dir),
+            path=rel_path,
             format=fr.get("format") or format_for(fr["path"]),
             obj_class=j.get("class"),
             size=fr.get("size"),
@@ -189,9 +222,12 @@ def reconcile(fs_records, jsonl_records, *, base_dir, prev=None, experiment_id=N
             summary=j.get("summary", {}) or {},
             lineage=_lineage_from(j),
         )
-        # carry forward user-owned fields by hash
-        if h in prev_user:
-            pu = prev_user[h]
+        # Exact duplicates share a hash but are separate files. Carry user choices by
+        # path+hash so blessing one copy never blesses or demotes another on re-scan.
+        pu = prev_by_identity.get((h, _identity_path(rel_path)))
+        if pu is None and current_hash_counts[h] == 1 and len(prev_by_hash.get(h, [])) == 1:
+            pu = prev_by_hash[h][0]  # single-file rename/move compatibility
+        if pu is not None:
             rec.canonical, rec.public, rec.notes = pu.canonical, pu.public, pu.notes
         objects[name] = rec
 

@@ -1,4 +1,4 @@
-"""figtracer/sync.py:_canonical — pick the hub note for an experiment.
+"""Core close-the-loop behavior for ``figtracer sync``.
 
 A single experiment spans several notes sharing one `experiment_id` (the hub + per-lineage
 notes like `<eid> — Tube 1 (T cell).md`). `_canonical` must always return the hub, whatever
@@ -9,6 +9,10 @@ Three hub signals, in preference order — pinned here because BOTH the current 
 (folder note + `role: hub`) and every pre-existing experiment (legacy `<eid>.md`) must resolve:
   1. `role: hub` frontmatter   2. folder note (stem == folder)   3. legacy `<eid>.md`
 """
+import subprocess
+
+import pytest
+
 from figtracer import sync
 
 
@@ -62,3 +66,58 @@ def test_legacy_eid_hub_still_resolves():
     hub = _note("DEMO-1", "/vault/DEMO-1 my-experiment/DEMO-1.md")
     lineage = _note("DEMO-1", "/vault/DEMO-1 my-experiment/DEMO-1 — Tube 2 (B cell).md")
     assert sync._canonical([lineage, hub], "DEMO-1") is hub
+
+
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _repo(tmp_path):
+    repo = tmp_path / "experiment"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "figtracer-tests@example.invalid")
+    _git(repo, "config", "user.name", "figtracer tests")
+    (repo / "analysis.qmd").write_text("initial\n")
+    _git(repo, "add", "analysis.qmd")
+    _git(repo, "commit", "-m", "initial")
+    return repo
+
+
+def test_commit_data_dir_commits_staged_work(tmp_path):
+    repo = _repo(tmp_path)
+    old_head = _git(repo, "rev-parse", "--short", "HEAD")
+    (repo / "analysis.qmd").write_text("updated\n")
+
+    head, committed = sync.commit_data_dir(str(repo), "sync DEMO-1")
+
+    assert committed is True
+    assert head != old_head
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_commit_data_dir_clean_tree_uses_current_head(tmp_path):
+    repo = _repo(tmp_path)
+    old_head = _git(repo, "rev-parse", "--short", "HEAD")
+
+    head, committed = sync.commit_data_dir(str(repo), "sync DEMO-1")
+
+    assert committed is False
+    assert head == old_head
+
+
+def test_commit_data_dir_rejected_commit_never_returns_stale_head(tmp_path):
+    repo = _repo(tmp_path)
+    old_head = _git(repo, "rev-parse", "--short", "HEAD")
+    (repo / "analysis.qmd").write_text("updated\n")
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho 'test rejection' >&2\nexit 1\n")
+    hook.chmod(hook.stat().st_mode | 0o111)
+
+    with pytest.raises(sync.GitSyncError, match="git commit failed: test rejection"):
+        sync.commit_data_dir(str(repo), "sync DEMO-1")
+
+    assert _git(repo, "rev-parse", "--short", "HEAD") == old_head
+    assert _git(repo, "diff", "--cached", "--name-only") == "analysis.qmd"

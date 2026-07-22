@@ -75,6 +75,39 @@ data_dir <- "{data_dir}"
 '''
 
 
+def _ensure_render_gitignored(exp_root: str) -> None:
+    """Keep the figtracer render layer out of git. f2/figtracer write per-render snapshot
+    qmds, ``sessioninfo.txt``, and image renders (svg/png/pdf — including large ``plot_spill``
+    PNGs) into ``outputs/<dated>/``; only ``outputs/MANIFEST.jsonl`` is durable figure
+    provenance and stays tracked. Without this, ``figtracer sync``'s ``git add -A`` sweeps the
+    whole regenerable render layer into the repo. Appends an idempotent managed block when a
+    project already has its own ``.gitignore``; user-written rules are never replaced."""
+    gi = os.path.join(exp_root, ".gitignore")
+    os.makedirs(exp_root, exist_ok=True)
+    existing = ""
+    if os.path.exists(gi):
+        with open(gi) as fh:
+            existing = fh.read()
+    rules = {line.strip() for line in existing.splitlines()}
+    if "outputs/*/" in rules and "!outputs/MANIFEST.jsonl" in rules:
+        return
+
+    block = (
+        "# figtracer render layer: per-render snapshot qmds, sessioninfo, and image\n"
+        "# renders under outputs/<dated>/ are regenerable. MANIFEST.jsonl is the committed\n"
+        "# figure provenance and stays tracked; this keeps `figtracer sync`'s `git add -A`\n"
+        "# from sweeping large renders (e.g. plot_spill PNGs) into the repo.\n"
+        "outputs/*/\n"
+        "!outputs/MANIFEST.jsonl\n"
+    )
+    if not existing or existing.endswith("\n\n"):
+        separator = ""
+    else:
+        separator = "\n" if existing.endswith("\n") else "\n\n"
+    with open(gi, "a") as fh:
+        fh.write(separator + block)
+
+
 def new(project: str, title: str, platform: str | None = None,
         cfg: dict | None = None, stamp: str | None = None,
         existing_data: str | None = None) -> dict:
@@ -104,6 +137,7 @@ def new(project: str, title: str, platform: str | None = None,
         data_dir = existing_data                       # point at the real folder
         analysis_dir = existing_data
         exports_dir = os.path.join(existing_data, "exports")
+        _ensure_render_gitignored(existing_data)
         from . import ingest
         panels = ingest.read_panels(existing_data)
         sample_info = ingest.read_samples(existing_data)
@@ -119,6 +153,7 @@ def new(project: str, title: str, platform: str | None = None,
         exports_dir = os.path.join(data_base, "exports")
         for d in (data_dir, analysis_dir, exports_dir):
             os.makedirs(d, exist_ok=True)
+        _ensure_render_gitignored(data_base)
         qmd_path = os.path.join(analysis_dir, f"{exp_id}.qmd")
         panel_block = "_Antibody/metal panel, sample list, conditions. Lives in the protocol sheet; summarise here._"
         sample_block = ""

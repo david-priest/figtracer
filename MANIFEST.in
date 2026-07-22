@@ -1,0 +1,2 @@
+include r/figtracer.R
+exclude tests/test_public_manifest.py

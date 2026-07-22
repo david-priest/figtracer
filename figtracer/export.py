@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -29,6 +30,7 @@ import tempfile
 
 from labkit import config as lkconfig
 from figtracer import sync
+from figtools.executables import find_chrome
 
 
 # ── the testable core: vault note markdown -> shareable markdown ─────────────
@@ -93,12 +95,6 @@ code { background: #eef0f2; padding: 0 3px; font-size: 9.5pt; border-radius: 2px
 em { color: #555; }
 """
 
-_CHROME_CANDIDATES = (
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-)
-
-
 def _find(name: str, candidates: tuple[str, ...] = ()) -> str | None:
     on_path = shutil.which(name)
     if on_path:
@@ -106,17 +102,14 @@ def _find(name: str, candidates: tuple[str, ...] = ()) -> str | None:
     return next((c for c in candidates if os.path.exists(c)), None)
 
 
-def _chrome() -> str | None:
-    return _find("google-chrome", _CHROME_CANDIDATES) or _find("chromium") or _find("chrome")
-
-
 def render_pdf(md_text: str, out_pdf: str, resource_path: str, title: str) -> None:
     """Render shareable markdown to PDF via pandoc + headless Chrome."""
     pandoc = _find("pandoc")
-    chrome = _chrome()
+    chrome = find_chrome()
     if not pandoc or not chrome:
         raise SystemExit(
-            "figtracer export: need both pandoc (%s) and Chrome/Chromium (%s) on this machine."
+            "figtracer export: need both pandoc (%s) and Chrome/Chromium (%s) on this machine; "
+            "set FIGTRACER_CHROME to override browser discovery."
             % ("found" if pandoc else "MISSING", "found" if chrome else "MISSING"))
     os.makedirs(os.path.dirname(out_pdf) or ".", exist_ok=True)
     with tempfile.TemporaryDirectory() as td:
@@ -131,7 +124,7 @@ def render_pdf(md_text: str, out_pdf: str, resource_path: str, title: str) -> No
             check=True)
         subprocess.run(
             [chrome, "--headless", "--disable-gpu", "--no-pdf-header-footer",
-             f"--print-to-pdf={out_pdf}", f"file://{html_f}"],
+             f"--print-to-pdf={out_pdf}", Path(html_f).resolve().as_uri()],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

@@ -62,13 +62,21 @@ def _legend_stub(report: dict) -> str:
 
 
 def _provenance(report: dict) -> str:
-    rows = ["| Panel | Source title | qmd | chunk | commit |",
-            "|---|---|---|---|---|"]
+    rows = ["| Panel | Source title | source | generator | qmd / chunk | commit |",
+            "|---|---|---|---|---|---|"]
     for p in report["panels"]:
-        rows.append("| {lab} | `{title}` | {qmd} | {chunk} | {commit} |".format(
+        qmd_chunk = " / ".join(x for x in (
+            f"`{p['qmd']}`" if p.get("qmd") else "",
+            f"`{p['chunk']}`" if p.get("chunk") else "",
+        ) if x) or "—"
+        source = p.get("source_path") or "—"
+        if p.get("source_kind"):
+            source = f"{source} ({p['source_kind']})"
+        rows.append("| {lab} | `{title}` | {source} | {generator} | {qmd_chunk} | {commit} |".format(
             lab=p.get("label") or "", title=_display_title(p.get("src", "")),
-            qmd=f"`{p['qmd']}`" if p.get("qmd") else "—",
-            chunk=f"`{p['chunk']}`" if p.get("chunk") else "—",
+            source=source,
+            generator=f"`{p['generator']}`" if p.get("generator") else "—",
+            qmd_chunk=qmd_chunk,
             commit=f"`{p['git_commit'][:8]}`" if p.get("git_commit") else "—",
         ))
     return "\n".join(rows)
@@ -91,7 +99,7 @@ def build_section(report: dict, preview_name: str, figure: str, width: int,
         f"_Assembled {stamp} · {report['journal']} · "
         f"{report['artboard_cm'][0]}×{report['artboard_cm'][1]} cm · "
         f"data-safe: {report['data_safe']} · spec `{os.path.basename(spec_path)}`_\n\n"
-        f"**Provenance** (each panel → source qmd / chunk / commit):\n\n"
+        f"**Provenance** (each panel → source / generator / commit):\n\n"
         f"{_provenance(report)}\n\n"
         f"{_legend_stub(report)}\n"
         f"{qc_block}\n"

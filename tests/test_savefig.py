@@ -1,11 +1,15 @@
 """figtracer.savefig: writes a figure + a MANIFEST line the pipeline resolves."""
 import json
 import os
+import datetime
+import importlib
 
 import pytest
 
 import figtracer
 from figtools import manifest
+
+savefig_module = importlib.import_module("figtracer.savefig")
 
 
 class FakeFig:
@@ -50,6 +54,28 @@ def test_savefig_appends_and_single_dated_folder(tmp_path):
     assert len(lines) == 2                                   # append-only
     subdirs = [d for d in os.listdir(out) if (out / d).is_dir()]
     assert len(subdirs) == 1                                 # one <date>_<nb> folder
+
+
+def test_savefig_sanitizes_display_title_and_avoids_same_second_collision(tmp_path, monkeypatch):
+    class FixedDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 22, 12, 34, 56, tzinfo=tz)
+
+    monkeypatch.setattr(savefig_module.datetime, "datetime", FixedDateTime)
+    out = tmp_path / "outputs"
+    first = figtracer.savefig(FakeFig(), title="CD4/CD8", outputs=str(out))
+    second = figtracer.savefig(FakeFig(), title="CD4/CD8", outputs=str(out))
+
+    assert first["title"] == second["title"] == "CD4/CD8"
+    assert first["fig"] != second["fig"]
+    assert os.path.basename(first["fig"]).endswith("_CD4_CD8.svg")
+    assert os.path.basename(second["fig"]).endswith("_CD4_CD8_2.svg")
+    assert (out / first["fig"]).is_file()
+    assert (out / second["fig"]).is_file()
+    records = [json.loads(line) for line in (out / "MANIFEST.jsonl").read_text().splitlines()]
+    assert [r["title"] for r in records] == ["CD4/CD8", "CD4/CD8"]
+    assert len({r["fig"] for r in records}) == 2
 
 
 def test_savefig_rejects_unknown_object(tmp_path):

@@ -27,7 +27,7 @@ import sys
 from datetime import date
 
 from figtracer import objects as O
-from figtracer.hashing import HashCache
+from figtracer.hashing import HashCache, sha256_file
 
 
 # ── scan-root / lockfile-dir resolution ──────────────────────────────────────────
@@ -228,7 +228,11 @@ def cmd_bless(args) -> int:
     lock = O.load_lockfile(lock_path)
     objs = lock.get("objects", {})
 
-    target = _find_object(objs, name=args.name, hash_=args.hash)
+    try:
+        target = _find_object(objs, name=args.name, hash_=args.hash)
+    except AmbiguousObjectError as exc:
+        print(f"\n  {exc}\n", file=sys.stderr)
+        return 1
     if target is None:
         print(f"\n  no object matching name='{args.name}' hash='{args.hash}'\n", file=sys.stderr)
         return 1
@@ -265,7 +269,11 @@ def cmd_trash(args) -> int:
     lock = O.load_lockfile(lock_path)
     objs = lock.get("objects", {})
 
-    target = _find_object(objs, name=args.name, hash_=args.hash)
+    try:
+        target = _find_object(objs, name=args.name, hash_=args.hash)
+    except AmbiguousObjectError as exc:
+        print(f"\n  {exc}\n", file=sys.stderr)
+        return 1
     if target is None:
         print(f"\n  no object matching name='{args.name}' hash='{args.hash}'\n", file=sys.stderr)
         return 1
@@ -275,7 +283,11 @@ def cmd_trash(args) -> int:
               f"Bless another object first.\n", file=sys.stderr)
         return 1
 
-    abs_path = O.to_abs(trec["path"], base)
+    try:
+        abs_path = _object_path_in_base(trec["path"], base)
+    except ValueError as exc:
+        print(f"\n  refusing to trash '{tname}': {exc}\n", file=sys.stderr)
+        return 1
     execute = args.yes
     mech, plan = _trash_plan(abs_path)
     head = "EXECUTE" if execute else "DRY RUN — add -y to move the file"
@@ -289,6 +301,15 @@ def cmd_trash(args) -> int:
 
     if execute:
         if os.path.isfile(abs_path):
+            try:
+                current_hash = sha256_file(abs_path)
+            except OSError as exc:
+                print(f"  ! could not verify current file: {exc}\n", file=sys.stderr)
+                return 1
+            if current_hash != trec.get("hash"):
+                print("  ! refusing to move file: its current sha256 no longer matches "
+                      "the lockfile; run `figtracer data scan -y` first\n", file=sys.stderr)
+                return 1
             ok = _do_trash(abs_path, mech)
             if not ok:
                 print("  ! move failed; lockfile left unchanged\n", file=sys.stderr)
@@ -307,7 +328,7 @@ def cmd_trash(args) -> int:
 def _trash_plan(abs_path: str) -> tuple[str, str]:
     if shutil.which("trash"):
         return "trash-cli", "move to macOS Trash via `trash`"
-    aside = f"{abs_path}.dup-{date.today().strftime('%Y%m%d')}"
+    aside = _trash_aside_path(abs_path)
     return "rename", f"rename aside → {os.path.basename(aside)}"
 
 
@@ -315,7 +336,7 @@ def _do_trash(abs_path: str, mech: str) -> bool:
     if mech == "trash-cli":
         r = subprocess.run(["trash", abs_path], capture_output=True, text=True)
         return r.returncode == 0
-    aside = f"{abs_path}.dup-{date.today().strftime('%Y%m%d')}"
+    aside = _trash_aside_path(abs_path)
     try:
         os.rename(abs_path, aside)
         return True
@@ -323,15 +344,49 @@ def _do_trash(abs_path: str, mech: str) -> bool:
         return False
 
 
+class AmbiguousObjectError(ValueError):
+    """A hash or prefix refers to more than one registry entry."""
+
+
+def _object_path_in_base(rel_path: str, base: str) -> str:
+    base_real = os.path.realpath(base)
+    object_real = os.path.realpath(O.to_abs(rel_path, base))
+    try:
+        contained = os.path.commonpath([base_real, object_real]) == base_real
+    except ValueError:
+        contained = False
+    if not contained:
+        raise ValueError("the lockfile path resolves outside the registry root")
+    return object_real
+
+
+def _trash_aside_path(abs_path: str) -> str:
+    stem = f"{abs_path}.dup-{date.today().strftime('%Y%m%d')}"
+    candidate = stem
+    n = 2
+    while os.path.exists(candidate):
+        candidate = f"{stem}.{n}"
+        n += 1
+    return candidate
+
+
 def _find_object(objs: dict, *, name=None, hash_=None):
     if name and name in objs:
         return name, objs[name]
     if hash_:
-        h = hash_ if hash_.startswith("sha256:") else None
+        needle = hash_.split(":")[-1]
+        matches = []
         for n, r in objs.items():
             rh = r.get("hash", "")
-            if rh == hash_ or rh == h or rh.split(":")[-1].startswith(hash_.split(":")[-1]):
-                return n, r
+            if rh == hash_ or rh.split(":")[-1].startswith(needle):
+                matches.append((n, r))
+        if len(matches) > 1:
+            names = ", ".join(n for n, _ in matches)
+            raise AmbiguousObjectError(
+                f"hash prefix '{hash_}' is ambiguous ({names}); select an object by name"
+            )
+        if matches:
+            return matches[0]
     return None
 
 

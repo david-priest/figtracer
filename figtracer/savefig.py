@@ -23,10 +23,13 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 
 MANIFEST_NAME = "MANIFEST.jsonl"
+_UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_MAX_TITLE_BYTES = 160
 
 
 def _git(args: list[str], cwd: str) -> str | None:
@@ -91,6 +94,28 @@ def _size_in(fig, w, h) -> tuple[float, float]:
     return float(w or 7.0), float(h or 5.0)
 
 
+def _filename_title(title: str) -> str:
+    """Filesystem-safe component for a display title; the manifest keeps the original."""
+    value = _UNSAFE_FILENAME.sub("_", str(title))
+    value = re.sub(r"\s+", " ", value).strip(" .") or "figure"
+    raw = value.encode("utf-8")
+    if len(raw) > _MAX_TITLE_BYTES:
+        value = raw[:_MAX_TITLE_BYTES].decode("utf-8", errors="ignore").rstrip(" .") or "figure"
+    return value
+
+
+def _figure_filename(folder: str, timestamp: str, title: str, fmt: str) -> str:
+    """Return a non-existing filename, suffixing repeated same-second saves."""
+    safe_title = _filename_title(title)
+    stem = f"{timestamp}_{safe_title}"
+    candidate = f"{stem}.{fmt}"
+    n = 2
+    while os.path.exists(os.path.join(folder, candidate)):
+        candidate = f"{stem}_{n}.{fmt}"
+        n += 1
+    return candidate
+
+
 def savefig(fig=None, title: str = "figure", *, w: float | None = None, h: float | None = None,
             format: str = "svg", embed: bool = True, channel: str = "note",
             outputs: str | None = None, dpi: int = 300, notebook: str | None = None) -> dict:
@@ -110,8 +135,10 @@ def savefig(fig=None, title: str = "figure", *, w: float | None = None, h: float
     folder = os.path.join(outputs, subdir)
     os.makedirs(folder, exist_ok=True)
 
+    if not re.fullmatch(r"[A-Za-z0-9]+", format):
+        raise ValueError("savefig: `format` must contain only letters and numbers")
     ts = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
-    fname = f"{ts}_{title}.{format}"
+    fname = _figure_filename(folder, ts, title, format)
     width_in, height_in = _size_in(fig, w, h)
     _write_figure(fig, os.path.join(folder, fname), format, dpi)
 

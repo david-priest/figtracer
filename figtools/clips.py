@@ -31,9 +31,7 @@ def classify_clips(root, vb, w_pt: float, h_pt: float) -> tuple[list[str], list[
             panel.append(cid)  # non-trivial clip -> keep (treat as panel)
             continue
         r = rects[0]
-        x = style.num(r.get("x")) or 0.0
-        y = style.num(r.get("y")) or 0.0
-        if abs(x) < 0.5 and abs(y) < 0.5 and svgdoc.is_full_canvas(r, vb, w_pt, h_pt):
+        if svgdoc.is_full_canvas(r, vb, w_pt, h_pt):
             canvas.append(cid)
         else:
             panel.append(cid)

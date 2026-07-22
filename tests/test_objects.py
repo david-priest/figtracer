@@ -59,6 +59,23 @@ def test_exact_dup_by_hash(tmp_path):
     assert exact[0]["hashes"] == ["sha256:same", "sha256:same"]
 
 
+def test_exact_duplicate_same_stem_is_not_collapsed(tmp_path):
+    base = str(tmp_path)
+    fs = [
+        _fs(os.path.join(base, "a", "obj.qs2"), 100, "sha256:same"),
+        _fs(os.path.join(base, "b", "obj.qs2"), 100, "sha256:same"),
+    ]
+
+    lock = O.reconcile(fs, [], base_dir=base)
+
+    assert len(lock["objects"]) == 2
+    assert {r["path"] for r in lock["objects"].values()} == {
+        os.path.join("a", "obj.qs2"), os.path.join("b", "obj.qs2"),
+    }
+    exact = [g for g in lock["duplicates"] if g["kind"] == "exact"]
+    assert len(exact) == 1 and len(exact[0]["paths"]) == 2
+
+
 def test_unrelated_objects_not_grouped(tmp_path):
     base = str(tmp_path)
     fs = [
@@ -124,6 +141,28 @@ def test_bless_survives_rescan(tmp_path):
     assert rec["canonical"] is True
     assert rec["public"] is True
     assert rec["notes"] == "final; IgM+IgD merge"
+
+
+def test_exact_duplicate_bless_survives_by_path_not_shared_hash(tmp_path):
+    base = str(tmp_path)
+    fs = [
+        _fs(os.path.join(base, "a", "obj.qs2"), 100, "sha256:same"),
+        _fs(os.path.join(base, "b", "obj.qs2"), 100, "sha256:same"),
+    ]
+    first = O.reconcile(fs, [], base_dir=base)
+    blessed_name = next(
+        name for name, rec in first["objects"].items()
+        if rec["path"] == os.path.join("b", "obj.qs2")
+    )
+    first["objects"][blessed_name]["canonical"] = True
+    first["objects"][blessed_name]["notes"] = "keep this physical copy"
+
+    second = O.reconcile(fs, [], base_dir=base, prev=first)
+    by_path = {rec["path"]: rec for rec in second["objects"].values()}
+
+    assert by_path[os.path.join("b", "obj.qs2")]["canonical"] is True
+    assert by_path[os.path.join("b", "obj.qs2")]["notes"] == "keep this physical copy"
+    assert by_path[os.path.join("a", "obj.qs2")]["canonical"] is False
 
 
 def test_duplicate_resolution_survives_rescan(tmp_path):

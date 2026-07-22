@@ -5,6 +5,9 @@ collaborator sees. The PDF step (pandoc + Chrome) is a thin shell exercised on t
 Mac, but this transform is pinned here so the "drop Log / flatten Obsidian syntax"
 contract can't silently regress.
 """
+from pathlib import Path
+import subprocess
+
 from figtracer import export
 
 NOTE = """---
@@ -71,3 +74,27 @@ def test_callout_rendered_as_plain_blockquote():
 def test_figure_caption_preserved():
     out = export.strip_for_collaborator(NOTE)
     assert "_meta20 heatmap._" in out
+
+
+def test_render_pdf_uses_shared_chrome_discovery_and_portable_uri(tmp_path, monkeypatch):
+    seen = {"calls": []}
+
+    def fake_run(cmd, **_kwargs):
+        seen["calls"].append(cmd)
+        if cmd[0] == "/portable/pandoc":
+            seen["markdown"] = Path(cmd[1]).read_bytes()
+            html_path = Path(cmd[cmd.index("-o") + 1])
+            html_path.write_text("<p>rendered</p>", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(export, "_find", lambda name: "/portable/pandoc" if name == "pandoc" else None)
+    monkeypatch.setattr(export, "find_chrome", lambda: "/portable/chromium")
+    monkeypatch.setattr(export.subprocess, "run", fake_run)
+
+    export.render_pdf("café\n", str(tmp_path / "out.pdf"), str(tmp_path), "Title")
+
+    chrome_cmd = seen["calls"][1]
+    assert chrome_cmd[0] == "/portable/chromium"
+    assert chrome_cmd[-1].startswith("file://")
+    assert "\\" not in chrome_cmd[-1]
+    assert seen["markdown"] == "café\n".encode()

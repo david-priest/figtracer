@@ -15,8 +15,8 @@ _STATUS_ORDER = ["planning", "staining", "acquired", "analysing", "done", "block
 def _collect(project_cfg: dict) -> list[dict]:
     """One row per experiment_id. An experiment may span several notes — a hub note plus
     per-lineage/compartment notes that carry only the experiment_id to link them (the lab's
-    'split a big experiment by lineage' convention). Keep the canonical `<exp_id>.md` hub note
-    (or the most complete one) so Mission Control lists each experiment exactly once."""
+    'split a big experiment by lineage' convention). Prefer the current explicit/folder-note
+    hub, then the legacy `<exp_id>.md`, so Mission Control agrees with ``figtracer sync``."""
     vault_exp_dir = os.path.join(project_cfg["_vault_root"], project_cfg["vault_dir"])
     by_id: dict[str, dict] = {}
     for note in glob.glob(os.path.join(vault_exp_dir, "*", "*.md")):
@@ -25,15 +25,24 @@ def _collect(project_cfg: dict) -> list[dict]:
         if not eid:
             continue
         fm["_note"] = note
-        canon = os.path.basename(note) == f"{eid}.md"
         prev = by_id.get(eid)
-        if prev is None:
+        if prev is None or _hub_rank(fm, str(eid)) < _hub_rank(prev, str(eid)):
             by_id[eid] = fm
-        elif canon and os.path.basename(prev["_note"]) != f"{eid}.md":
-            by_id[eid] = fm                      # prefer the canonical hub note
-        elif not prev.get("title") and fm.get("title"):
+        elif _hub_rank(fm, str(eid)) == _hub_rank(prev, str(eid)) \
+                and not prev.get("title") and fm.get("title"):
             by_id[eid] = fm                      # else prefer the one carrying real metadata
     return sorted(by_id.values(), key=lambda r: str(r.get("experiment_id")))
+
+
+def _hub_rank(fm: dict, eid: str) -> tuple[bool, bool, bool]:
+    path = fm["_note"]
+    stem = os.path.splitext(os.path.basename(path))[0]
+    folder = os.path.basename(os.path.dirname(path))
+    return (
+        str(fm.get("role", "")).strip().lower() != "hub",
+        stem != folder,
+        stem != eid,
+    )
 
 
 def _table(rows: list[dict]) -> str:
@@ -42,8 +51,8 @@ def _table(rows: list[dict]) -> str:
     lines = [head]
     for r in rows:
         eid = r.get("experiment_id", "")
-        note_link = f"[[{eid}]]"
-        qmd = r.get("analysis_qmd")
+        note_stem = os.path.splitext(os.path.basename(r.get("_note", "")))[0] or str(eid)
+        note_link = f"[[{note_stem}]]"
         links = note_link
         if r.get("panel"):
             links += f" · panel: [[{r['panel']}]]"
@@ -51,7 +60,7 @@ def _table(rows: list[dict]) -> str:
         nsamp = len(samples) if isinstance(samples, list) else samples
         lines.append("| {eid} | {title} | `{status}` | {plat} | {ns} | {upd} | {links} |".format(
             eid=note_link, title=r.get("title", ""), status=r.get("status", "?"),
-            plat=r.get("platform", ""), ns=nsamp, upd=r.get("updated", ""), links=note_link))
+            plat=r.get("platform", ""), ns=nsamp, upd=r.get("updated", ""), links=links))
     return "\n".join(lines)
 
 

@@ -6,6 +6,8 @@ NEVER touches a canonical object.
 """
 import os
 
+import pytest
+
 from figtracer import data
 from figtracer import objects as O
 
@@ -138,3 +140,63 @@ def test_trash_execute_renames_aside_when_no_trash_cli(tmp_path, monkeypatch):
     assert aside                                                  # renamed aside, not deleted
     lock = O.load_lockfile(_lock_path(d))
     assert "sceHI2_clustered" not in lock["objects"]             # dropped from registry
+
+
+def test_hash_prefix_must_be_unique():
+    objs = {
+        "a": {"hash": "sha256:abc111"},
+        "b": {"hash": "sha256:abc222"},
+    }
+    with pytest.raises(data.AmbiguousObjectError, match="ambiguous"):
+        data._find_object(objs, hash_="abc")
+
+
+def test_trash_refuses_file_changed_since_scan(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(data.shutil, "which", lambda name: None)
+    d = str(tmp_path)
+    p = _obj(d, "obj.qs2", b"original")
+    data.main(["scan", "--dir", d, "-y"])
+    with open(p, "wb") as fh:
+        fh.write(b"changed!")
+
+    rc = data.main(["trash", "obj", "--dir", d, "-y"])
+
+    assert rc == 1
+    assert os.path.isfile(p)
+    assert "no longer matches" in capsys.readouterr().err
+    assert "obj" in O.load_lockfile(_lock_path(d))["objects"]
+
+
+def test_trash_refuses_lockfile_path_outside_registry(tmp_path, capsys):
+    base = tmp_path / "registry"
+    base.mkdir()
+    outside = tmp_path / "outside.qs2"
+    outside.write_bytes(b"outside")
+    O.dump_lockfile({
+        "version": 1,
+        "objects": {"outside": {
+            "hash": "sha256:not-used", "path": os.path.join("..", "outside.qs2"),
+            "canonical": False, "public": False,
+        }},
+        "duplicates": [],
+    }, str(base / O.LOCKFILE_NAME))
+
+    rc = data.main(["trash", "outside", "--dir", str(base), "-y"])
+
+    assert rc == 1
+    assert outside.is_file()
+    assert "outside the registry root" in capsys.readouterr().err
+
+
+def test_rename_aside_never_overwrites_existing_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(data.shutil, "which", lambda name: None)
+    source = tmp_path / "obj.qs2"
+    source.write_bytes(b"current")
+    first_aside = tmp_path / f"obj.qs2.dup-{data.date.today().strftime('%Y%m%d')}"
+    first_aside.write_bytes(b"older backup")
+
+    assert data._do_trash(str(source), "rename") is True
+
+    assert first_aside.read_bytes() == b"older backup"
+    second_aside = tmp_path / f"{first_aside.name}.2"
+    assert second_aside.read_bytes() == b"current"

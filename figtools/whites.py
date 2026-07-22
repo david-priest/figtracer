@@ -1,34 +1,27 @@
-"""Detect and strip redundant white chrome — the white background rectangles and white
-border/frame rects that svglite emits and that otherwise get hand-deleted in Illustrator.
+"""Detect and strip redundant white chrome — the full-canvas white background rectangles
+and white border/frame rects that svglite emits and that otherwise get hand-deleted in
+Illustrator.
 
 The load-bearing safety rule, learned from real panels: a heatmap's cells are colored rects
 with WHITE SEPARATOR STROKES (fill:#97C9E0, stroke:#FFFFFF). Those white strokes are DATA, not
 chrome. So we ONLY treat a rect as white chrome when it has NO coloured fill:
-  - white background : fill is white  (full-canvas, OR large panel/facet background)
-  - white border/frame: fill is none AND stroke is white (full-canvas, OR large)
+  - white background : fill is white AND the rect covers the full canvas
+  - white border/frame: fill is none AND stroke is white AND the rect covers the full canvas
 A rect with a coloured fill is never touched, whatever its stroke. Small white rects (legend
-keys, rare white data) are kept via an area gate. Removal is verifiable: rendered on a white
-page, stripping white chrome is pixel-identical (see `figtools verify`).
+keys, rare white data) and large partial white rects are both kept: area alone cannot prove
+that a rectangle is chrome. Removal is verifiable with `figtools verify`.
 """
 from __future__ import annotations
 
 from . import style, svgdoc
 
 
-def _rect_area(el, vb, w_pt, h_pt) -> float:
-    w = (el.get("width") or "").strip()
-    h = (el.get("height") or "").strip()
-    if w.endswith("%") or h.endswith("%"):
-        return (vb[2] * vb[3]) if vb else (w_pt * h_pt)
-    wv, hv = style.num(w), style.num(h)
-    if wv is None or hv is None:
-        return 0.0
-    return abs(wv * hv)
-
-
 def find_white_chrome(root, vb, w_pt, h_pt, area_frac: float = 0.03):
-    """Return (backgrounds, borders) lists of rect elements that are white chrome."""
-    canvas_area = (vb[2] * vb[3]) if vb else (w_pt * h_pt)
+    """Return full-canvas (backgrounds, borders) lists.
+
+    ``area_frac`` now controls the full-canvas edge tolerance; retaining the keyword keeps
+    callers compatible while removing the unsafe "large area == chrome" inference.
+    """
     backgrounds, borders = [], []
     for el in root.iter():
         if not isinstance(el.tag, str) or svgdoc.local(el.tag) != "rect":
@@ -40,9 +33,7 @@ def find_white_chrome(root, vb, w_pt, h_pt, area_frac: float = 0.03):
         fill_none = (fill is None) or fill.strip().lower() in ("none", "transparent")
         if not (fill_white or fill_none):
             continue
-        large = svgdoc.is_full_canvas(el, vb, w_pt, h_pt) or \
-            _rect_area(el, vb, w_pt, h_pt) >= area_frac * canvas_area
-        if not large:
+        if not svgdoc.is_full_canvas(el, vb, w_pt, h_pt, tolerance_frac=area_frac):
             continue
         if fill_white:
             backgrounds.append(el)
