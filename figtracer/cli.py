@@ -7,6 +7,7 @@
   fig <sub>              -> figtools
   protocol               -> figtracer.protocol  (renders an experiment's protocol.yaml)
   sync                   -> figtracer.sync       (the close-the-loop roundup)
+  vault <sub>            -> figtracer.vault      (whole-vault health checks)
 
 It deliberately stays a dispatcher: each sub-tool owns its own argument parsing, so the
 machinery has one entry point without re-implementing anything. The old `labkit`/`figtools`
@@ -40,6 +41,9 @@ usage: figtracer <command> [args]
 
   figures <-> notes
     figsync       sync lab-note figures to the latest f2 render (index | drift | sync)
+
+  whole-vault health
+    vault lint    broken links, ambiguous filenames, orphaned attachments (read-only)
 
   close the loop
     sync          end-of-session roundup: figures -> note -> Mission Control -> commit
@@ -90,6 +94,12 @@ def main(argv=None) -> int:
     if cmd == "figsync":
         from figtracer import figsync
         return figsync.main(rest)
+
+    if cmd == "vault":
+        from figtracer import vault
+        if not rest or rest[0] in ("-h", "--help"):
+            return vault.main(["-h"])
+        return vault.main(rest)
 
     if cmd == "export":
         from figtracer import export

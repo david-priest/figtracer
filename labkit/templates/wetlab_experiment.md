@@ -53,6 +53,12 @@ _Link the qmd; key processing decisions. Figures land below via `figtools embed`
 
 _What did we learn? Next experiment?_
 
+### Carry-forward to the next run
+
+_Flags the next run must act on: protocol changes, budget adjustments, controls that failed, things to test. **One bullet per flag, each stating the action, not just the observation.** If a flag has been made durable elsewhere (a `Protocols/derived/*.md` step, a `protocol.yaml` change), link it here — this section is the index, not the only copy._
+
+_Read every prior run's carry-forward before authoring the next `protocol.yaml` (see the `figtracer-experiment` skill, lifecycle step 2)._
+
 ---
 
 # Log
