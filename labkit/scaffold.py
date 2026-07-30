@@ -131,12 +131,29 @@ def new(project: str, title: str, platform: str | None = None,
     os.makedirs(os.path.join(note_folder, "attachments"), exist_ok=True)
     note_path = os.path.join(note_folder, os.path.basename(note_folder) + ".md")
 
-    # --- data/analysis/exports: backfill an existing run, or scaffold fresh ---
+    # --- experiment tree: backfill an existing run, or scaffold fresh ---
+    #
+    # The tree is split by ROLE in the pipeline, not by which tool writes each folder:
+    #
+    #   protocol/   protocol.yaml + its rendered workbook / pdf / shadow
+    #   data/       INPUTS ONLY — raw acquisition, panels, gates. Nothing derived.
+    #   analysis/   the qmd and its small companions
+    #   scripts/    per-experiment builders and renderers
+    #   outputs/    ALL derived figures, with ONE MANIFEST.jsonl beside them
+    #   deck/       a results presentation and its generator, if there is one
+    #
+    # `outputs/` is deliberately the single figure destination. Splitting figures by the tool
+    # that produced them (an `exports/` for one renderer, a `data/outputs/` for another) gives
+    # two MANIFESTs for figsync to reconcile, two .gitignore patterns to keep in step, and no
+    # way for a reader to know which folder to open.
+    #
+    # `exports_dir` keeps its historical name in the config and note frontmatter — sync.py and
+    # every existing note read that key — but it now points at outputs/.
     backfill = bool(existing_data)
     if backfill:
         data_dir = existing_data                       # point at the real folder
         analysis_dir = existing_data
-        exports_dir = os.path.join(existing_data, "exports")
+        exports_dir = os.path.join(existing_data, "outputs")
         _ensure_render_gitignored(existing_data)
         from . import ingest
         panels = ingest.read_panels(existing_data)
@@ -150,8 +167,10 @@ def new(project: str, title: str, platform: str | None = None,
         data_base = os.path.join(p["data_root"], f"{exp_id} {slug}")
         data_dir = os.path.join(data_base, "data")
         analysis_dir = os.path.join(data_base, "analysis")
-        exports_dir = os.path.join(data_base, "exports")
-        for d in (data_dir, analysis_dir, exports_dir):
+        exports_dir = os.path.join(data_base, "outputs")      # the single figure destination
+        for d in (data_dir, analysis_dir, exports_dir,
+                  os.path.join(data_base, "protocol"),
+                  os.path.join(data_base, "scripts")):
             os.makedirs(d, exist_ok=True)
         _ensure_render_gitignored(data_base)
         qmd_path = os.path.join(analysis_dir, f"{exp_id}.qmd")

@@ -95,6 +95,79 @@ equals the sample count.
 
 ---
 
+## Where the renderer and the YAML live
+
+Two layouts are supported, and `figtracer protocol --dir <experiment root>` resolves either:
+
+| layout | renderer | YAML |
+|---|---|---|
+| **role-based tree** (current) | `scripts/build_protocol.py` | `protocol/protocol.yaml` |
+| flat (older experiments) | `build_protocol.py` | `protocol.yaml` |
+
+The role-based locations are checked **first**, so a half-migrated experiment that still has a stale
+copy in its root renders from the canonical one. The renderer is always invoked with
+`--dir <experiment root>` — never with the `scripts/` path — because it resolves its output relative
+to the root, and `scripts/` holds builders, never their output.
+
+---
+
+## Multi-track protocols — what belongs in a lane column
+
+A protocol with parallel arms renders one **lane column** per track, so a bench user can read a
+single column top to bottom and get that track's complete route.
+
+**The tracks are whatever actually diverges as the day is executed.** This is worth stating because
+it is easy to get wrong: the obvious candidate is usually the thing the experiment is *comparing*,
+but that is not always the thing that *diverges procedurally*. Examples of legitimate track axes:
+
+| track axis | when it is the right one |
+|---|---|
+| method / protocol variant | a methods benchmark — the arms differ in their own steps |
+| **sample arm** | one shared method, but arms in different media, or offset in time |
+| treatment group | arms diverge at a dosing step and rejoin |
+| timepoint | staggered harvests with different downstream handling |
+| genotype / cell line | same steps, but arm-specific reagents or gates |
+
+A worked failure: a run with **one** fixation method and **two** sample arms was initially rendered
+with the method as its single lane. That column simply echoed the shared-action column on every row,
+while the real divergence — two arms in different media, fixed ~2.5 h apart — was invisible. Keying
+the lanes to the arms instead made each column a readable route.
+
+**Consequence for the schema:** the lane axis is declared independently of the reagent/assembly
+layer. Reagent assemblies *reference* tracks; they do not define them. Where a renderer supports it,
+`execution_plan.plan_tracks: [{key, header}]` sets the lane columns, falling back to the
+method/variant list when absent so existing protocols render unchanged.
+
+**Tracks converge and diverge.** Most multi-track protocols are not parallel end to end — they split
+at some step and rejoin at another (a pool, a shared stain, a single acquisition). Say so in the
+step text at both points, and leave the lane cells empty after convergence rather than repeating the
+shared instruction once per lane. Repeating it is how lane columns fill up with text that only looks
+like per-track detail.
+
+---
+
+## Preparations are steps, not annotations
+
+Reagent preparations are commonly rendered as a side table, or as a note under the row that uses
+them. Prefer rendering them as **numbered steps in the same visual language as the rest of the
+protocol** — an identifier, an instruction in the body font, and the same watchout column.
+
+The reason is not aesthetic. A preparation has a recipe, an order, and a failure mode: it is the most
+operationally dense text in the document and the easiest place to introduce a silent error. Setting
+it in small grey italic — which is the natural default, since it reads as metadata in a schema —
+makes the least forgiving content the least legible thing on the page.
+
+Practical rules that follow:
+
+- **Number them** (`P1`, `P2`, …) so a step in the timed plan can cite the prep it depends on.
+- **Body font, full contrast.** Reserve italic/grey for genuine commentary, and keep even that dark
+  enough to read in print — a 50% grey is too light once it is italic at body size.
+- **State what each prep is *for*** (which wells, which arm, which track), not just its recipe.
+- **Keep the derived volumes derived.** A prep's recipe is a function of stock, working
+  concentration and required volume; store those and compute the rest, exactly as for panels.
+
+---
+
 ## The workflow for a NEW experiment
 
 1. **Inputs** — hand the agent a **sample spreadsheet** (IDs, diagnosis, dates) and a **panel

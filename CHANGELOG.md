@@ -11,6 +11,29 @@ All notable changes to figtracer are documented here. The format is based on
 - `figtracer fig register` brings existing SVG/PDF/PNG artifacts from scripted or external
   renderers into the same append-only MANIFEST, git-provenance, and LabNotes embed loop as
   `f2()` and `figtracer.savefig()`; `figsync` can now materialize registered SVGs directly.
+- `docs/PROTOCOLS.md` gains guidance for **multi-track protocols** — how to choose the lane-column
+  axis (it is whatever diverges procedurally, which is not always what the experiment compares),
+  how to handle tracks that converge and diverge, and why reagent preparations should render as
+  numbered steps rather than as annotations.
+- `figtracer new` scaffolds a **role-based experiment tree**, split by each folder's role in the
+  pipeline rather than by which tool writes it: `protocol/` (the `protocol.yaml` and its rendered
+  workbook), `data/` (**inputs only** — nothing derived), `analysis/`, `scripts/` (per-experiment
+  builders), `outputs/` (**all** derived figures, with one `MANIFEST.jsonl` beside them) and
+  `deck/`. Existing experiments are backfilled in place rather than restructured.
+
+  `outputs/` is deliberately the **single figure destination**. Splitting figures by the tool that
+  produced them — an `exports/` for one renderer, a `data/outputs/` for another — gives `figsync`
+  two MANIFESTs to reconcile, two `.gitignore` patterns to keep in step, and no way for a reader to
+  know which folder to open. The `exports_dir` config and note-frontmatter key keeps its historical
+  name for compatibility but now points at `outputs/`.
+
+### Fixed
+
+- `figtracer protocol` now finds the renderer and YAML in the **role-based experiment tree**
+  (`scripts/build_protocol.py` + `protocol/protocol.yaml`), not only in the flat legacy layout.
+  It had been exiting with "no build_protocol.py found" on every migrated experiment. Canonical
+  locations are checked first, so a half-migrated experiment renders from `protocol/` rather than a
+  stale copy left in its root, and the error message now names where it looked.
 
 ## [0.1.0] — unreleased
 
