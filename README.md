@@ -6,9 +6,10 @@
 
 **Change the code. Re-run. Your lab note updates itself.**
 
-figtracer is a Git-native figure-to-note loop for R and Python. It connects each rendered
-figure to its analysis source and commit, then keeps one figure block in a plain Markdown lab
-note current—without copy-pasting screenshots.
+figtracer is a Git-native figure-to-note loop for R and Python, for when your write-up lives
+*somewhere other than your analysis* — a Markdown lab note, a vault, a manuscript draft. It
+connects each rendered figure to its analysis source and commit, then keeps that note's figure
+block current across the gap, so a figure in the note can never quietly lag the code that made it.
 
 ```bash
 uv tool install "git+https://github.com/david-priest/figtracer.git"
@@ -108,6 +109,8 @@ checklist while keeping one detailed internal QMD as the source of truth.
 
 figtracer is a good fit when:
 
+- the write-up lives in a different document from the analysis — a Markdown note, an Obsidian
+  vault, a manuscript — so no render step can keep its figures current;
 - analysis happens in R or Python and figures change as the code changes;
 - the durable record should be readable Markdown, YAML, SVG, and JSONL in git;
 - figures from multiple scripts or languages need to converge on one note;
@@ -116,6 +119,9 @@ figtracer is a good fit when:
 
 It is not the right primary tool when:
 
+- your figures are generated inline by the document that displays them (a knitted
+  Quarto/R Markdown/Jupyter render) — that already guarantees the figure matches the code,
+  and you don't need this;
 - you need regulated ELN controls, electronic signatures, audit certification, or validated
   compliance workflows;
 - you need a LIMS for sample inventory, freezer locations, instruments, or chain of custody;
