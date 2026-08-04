@@ -4,12 +4,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/david-priest/figtracer/actions/workflows/ci.yml/badge.svg)](https://github.com/david-priest/figtracer/actions/workflows/ci.yml)
 
-**Change the code. Re-run. Your lab note updates itself.**
+**Your write-up lives outside your analysis. Keep its figures honest.**
 
-figtracer is a Git-native figure-to-note loop for R and Python, for when your write-up lives
-*somewhere other than your analysis* — a Markdown lab note, a vault, a manuscript draft. It
-connects each rendered figure to its analysis source and commit, then keeps that note's figure
-block current across the gap, so a figure in the note can never quietly lag the code that made it.
+figtracer is a Git-native figure-to-note loop for R and Python. When the record of what your
+results *mean* is a separate document — a Markdown lab note, a vault, a manuscript draft — no
+render step keeps its figures current. figtracer connects each rendered figure to its analysis
+source and commit, then keeps that note's figure block current across the gap, so a figure in
+the note can never quietly lag the code that made it.
 
 ```bash
 uv tool install "git+https://github.com/david-priest/figtracer.git"
