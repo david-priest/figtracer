@@ -91,12 +91,35 @@ required for the five-minute demo or the save-side figure seam.
 ```text
 figtracer new       scaffold a fully cross-linked experiment: notes + data/analysis/outputs dirs
 figtracer index     rebuild a project's Mission Control dashboard (every experiment by status)
+figtracer figrun    re-render a notebook's figure chunks headlessly, from the .qmd itself
 figtracer protocol  call an experiment-local renderer for protocol.yaml (legacy wrapper)
 figtracer data      a content-addressed registry of analysis objects (.qs2/.rds/.RData)
 figtracer doctor    profile-aware QMD checks for internal, collaborator, and publication views
 figtracer sync      end-of-session roundup: figures -> note -> dashboard -> git commit
 figtracer export    a clean collaborator-facing PDF of an experiment's notes
 ```
+
+### Re-rendering figures without reopening the notebook
+
+Change an axis label, a threshold or a colour, and the figure has to be made again. `figrun` does
+that from the command line:
+
+```bash
+figtracer figrun --exp EXP01 --list          # what the notebook contains, and how each chunk is classified
+figtracer figrun --exp EXP01 umap-by-group   # re-render named chunks
+figtracer figrun --exp EXP01 --changed       # every render older than the notebook's last edit
+figtracer figrun --exp EXP01 --awaiting      # embedded in a note, but never rendered
+```
+
+It executes chunk bodies taken **verbatim from the `.qmd`, by label**, so it cannot draw anything
+that is not already in the notebook — the notebook remains the definition of what the figure is,
+and `figrun` is only the thing that runs it. Prerequisites are worked out by dataflow analysis of
+the parse tree, so there is no chunk graph to maintain by hand.
+
+Chunks that rebuild the analysis object itself — clustering, embedding, merging, saving the
+checkpoint — are skipped unless you name them. Re-running those invalidates every figure drawn at
+a level applied afterwards, and can destroy state that no chunk can reproduce, such as gates drawn
+by hand in an interactive app. Rendering a figure should never be able to do that by accident.
 
 Follow the [full experiment-system setup](docs/FULL_SYSTEM.md) when you want that layer. The
 current protocol command is a bring-your-own-renderer wrapper; packaging a general protocol

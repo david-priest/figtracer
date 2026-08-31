@@ -14,6 +14,9 @@ def build_parser() -> argparse.ArgumentParser:
     pn.add_argument("--project", required=True)
     pn.add_argument("--platform", help="override the project default platform")
     pn.add_argument("--config", help="path to projects.yaml")
+    pn.add_argument("--id", dest="exp_id",
+                    help="use this experiment id verbatim (e.g. EXP04) instead of the generated "
+                         "PROJECT-YYYY-MM-DD-A. For projects that number their runs by hand.")
     pn.add_argument("--stamp", help="override date (YYYY-MM-DD) for reproducible tests")
     pn.add_argument("--data-dir", help="backfill: point at an existing run folder + ingest its "
                                        "panel/sample sheets (instead of scaffolding fresh folders)")

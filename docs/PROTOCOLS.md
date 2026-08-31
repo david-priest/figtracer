@@ -168,6 +168,29 @@ Practical rules that follow:
 
 ---
 
+## ⛔ NEVER freeze or split panes in a rendered protocol
+
+**Hard rule (David, 2026-08-26). No `freeze_panes`, no split panes, on any sheet of a protocol
+workbook.**
+
+The reason is not preference. A protocol sheet is read at the bench by scrolling top to bottom, and
+a frozen pane silently truncates what a reader can reach: on iGCAG1 the inherited builder froze the
+Protocol sheet, and the **barcode pipetting grid — rows 83–93, the single most operationally dense
+table in the document — was invisible**. It had rendered correctly the whole time. The bench user's
+conclusion was that the protocol had no barcoding section at all.
+
+That is the failure mode: a frozen pane does not look like a bug. It looks like missing content, and
+the natural response is to go and re-add content that already exists.
+
+Practical rules:
+
+- Never set `ws.freeze_panes` in a protocol renderer. If a header needs to stay visible, repeat it
+  as a section header in the body instead — the same way the procedure sections already work.
+- This applies to every sheet, including Samples and Panels, not just the Protocol sheet.
+- When inheriting a builder from another experiment, **grep it for `freeze_panes` before the first
+  render**. The builders are copied between projects (see "Where the renderer and the YAML live"),
+  so this propagates the same way bugs did.
+
 ## The workflow for a NEW experiment
 
 1. **Inputs** — hand the agent a **sample spreadsheet** (IDs, diagnosis, dates) and a **panel

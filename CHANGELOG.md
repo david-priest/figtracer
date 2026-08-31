@@ -6,6 +6,45 @@ All notable changes to figtracer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-31
+
+### Added
+
+- **`figtracer figrun`** renders an analysis notebook's figure chunks **headlessly**, so a figure
+  can be re-made after a code edit without reopening an interactive session. It executes chunk
+  bodies taken **verbatim from the `.qmd`, by label**, so it cannot render anything that is not
+  already in the notebook — the notebook stays the definition of what is drawn, and figrun is only
+  the thing that runs it. Prerequisites are resolved by dataflow (`codetools::findGlobals` over
+  real parse trees), so there is no hand-maintained chunk graph to drift out of date.
+
+  Selection modes: named chunks, `--list` to see what a notebook contains and how each chunk is
+  classified, `--awaiting` for figures embedded in a note but absent from the MANIFEST, and
+  `--changed` for renders older than the notebook's last edit.
+
+  It also closes a provenance gap: `f2()` writes the MANIFEST's `chunk_label` from
+  `knitr::opts_current`, which is `NULL` outside a knit, so every entry written interactively
+  records `null` and no figure can be traced back to the chunk that drew it. figrun knows the
+  label by construction and sets it.
+
+  Two guards are worth knowing about. Chunks that rebuild the analysis object — clustering,
+  embedding, merging, the checkpoint save — are **skipped unless named**, because re-running them
+  invalidates every figure drawn at a level applied afterwards, and because they may destroy state
+  that no chunk can reproduce, such as gates drawn by hand in an interactive app. And a chunk
+  marked `eval: false` is reported as exactly that, rather than as an unknown label.
+
+### Fixed
+
+- `figrun` classifies chunks on **code, not comments**. A doc comment naming an expensive call was
+  enough to reclassify a constants chunk and drop it from every plan, killing downstream chunks on
+  a missing constant. The comment stripper is quote-aware, since plotting code is full of
+  `"#RRGGBB"` colour literals and cutting at the first `#` would hide a real `f2(` later on the
+  same line.
+- `--allow-expensive` un-skips **only the chunks named as targets**, not every expensive chunk in
+  the notebook. It previously emptied the whole skip list, which let the prerequisite resolver
+  trace the analysis object back past the checkpoint reload into the raw-data load and rebuild it
+  from source — discarding anything held only in the object's metadata and then overwriting the
+  checkpoint.
+
 ### Added
 
 - `figtracer fig register` brings existing SVG/PDF/PNG artifacts from scripted or external

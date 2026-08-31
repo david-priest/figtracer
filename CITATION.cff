@@ -14,8 +14,8 @@ authors:
 repository-code: "https://github.com/david-priest/figtracer"
 doi: "10.5281/zenodo.21288980"
 license: MIT
-version: 0.1.0
-date-released: 2026-07-10
+version: 0.2.0
+date-released: 2026-08-31
 keywords:
   - reproducibility
   - provenance

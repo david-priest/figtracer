@@ -46,6 +46,13 @@ def _display_source(path: str, root: str | None) -> str:
 
 
 def _svg_size(path: str) -> tuple[float | None, float | None]:
+    """Physical size in inches, from the SVG root's own width/height.
+
+    ⚠️ A unitless root size is CSS **pixels**, so `width="1500"` means 1500/72 =
+    20.8 INCHES — and figsync rasterises the note attachment at 300 dpi, giving a
+    6250 px / 1.2 MB PNG for a figure displayed at ~900 px. Author registered SVGs
+    with an explicit physical width (`width="10in"`, viewBox unchanged); 7–10 in is
+    right for a note figure. See AGENTS.md, "Authoring an SVG to register"."""
     try:
         root = svgdoc.load(path).getroot()
         width_pt, height_pt = svgdoc.root_size_pt(root)

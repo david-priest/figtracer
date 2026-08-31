@@ -41,6 +41,7 @@ usage: figtracer <command> [args]
 
   figures <-> notes
     figsync       sync lab-note figures to the latest f2 render (index | drift | sync)
+    figrun        render a qmd's figure chunks headlessly (--list | --changed | --awaiting)
 
   whole-vault health
     vault lint    broken links, ambiguous filenames, orphaned attachments (read-only)
@@ -94,6 +95,10 @@ def main(argv=None) -> int:
     if cmd == "figsync":
         from figtracer import figsync
         return figsync.main(rest)
+
+    if cmd == "figrun":
+        from figtracer import figrun
+        return figrun.main(rest)
 
     if cmd == "vault":
         from figtracer import vault

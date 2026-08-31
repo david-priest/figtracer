@@ -7,10 +7,16 @@ figure's latest render from the MANIFEST and overwrites the **stable PNG** the n
 (`<exp>_<title>.png`) — the note prose is never touched. Provenance goes in a
 separate auto-generated index note.
 
-  figtracer figsync index  [--exp ID] [--committed-only]      latest-per-title
-  figtracer figsync drift  [--exp ID] [--committed-only]      note<->figure rename/orphan report
-  figtracer figsync sync   [--exp ID] [--committed-only] [-y] materialize embedded figures
-  figtracer figsync prune  [--exp ID] [--keep N] [-y]         trash superseded f2 renders (keep newest N/title)
+  figtracer figsync index    [--exp ID | --project KEY] [--committed-only]  latest-per-title
+  figtracer figsync drift    [--exp ID | --project KEY]                     note<->figure orphan report
+  figtracer figsync sync     [--exp ID | --project KEY] [-y]                materialize embedded figures
+  figtracer figsync register <title> --file P [--exp ID | --project KEY] [-y]  adopt a non-f2 image
+  figtracer figsync prune    [--exp ID | --project KEY] [--keep N] [-y]     trash superseded renders
+
+Scope: `--exp` is an experiment (a note carrying `experiment_id`); `--project` is a
+projects.yaml key, and operates on the project's OWN notes — planning, proposal,
+Mission Control — the ones alongside `Experiments/` rather than inside it. Those notes
+have no experiment_id, which is exactly why they used to be unreachable.
 
 Design notes:
 - **Stable filename, never dated** in the embed -> note text never churns; history
@@ -21,6 +27,20 @@ Design notes:
   (via MANIFEST `git_commit`), so a synced note points at a reproducible figure.
 - **drift** reports the two failure modes that rot quietly: note embeds that match
   no f2 title (rename/standardise needed) and embed=TRUE figures placed nowhere.
+- **register** is the door for a figure with no f2 call behind it — a schematic, an
+  instrument screenshot, a collaborator's panel. The copy+MANIFEST work is
+  `figtools.register.register_figure` (standalone, reusable); this wrapper adds the
+  one thing figtools cannot do without importing labkit and breaking the packaging
+  seam: **resolving `--exp` to that experiment's `outputs/`**. Without it the caller
+  has to hand-compute `--outputs`, and a wrong guess starts a rival MANIFEST one
+  directory up, which `sync` then silently fails to resolve against.
+  Once registered the figure is ordinary: `place` embeds it, `sync` materialises it,
+  `drift` reports it, `prune` ages it out. Re-register an edited source to publish a
+  new version — MANIFEST is append-only and the resolver takes the newest.
+- **Project scope does NOT walk up the tree** (`walk_up=False`). Experiment scope climbs
+  from data_dir to find outputs/, stopping at the first project-root marker; a
+  sub-project's data_root routinely sits inside a PARENT project's git repo, so
+  climbing would cross the project boundary and merge the parent's figures in.
 """
 from __future__ import annotations
 
@@ -48,7 +68,7 @@ def _key(e):
     return e.get("saved_at") or e.get("timestamp") or ""
 
 
-def _manifests(analysis_dir: str) -> list[str]:
+def _manifests(analysis_dir: str, walk_up: bool = True) -> list[str]:
     # f2 writes to `here("outputs")` — the here-root's outputs/. That root is the
     # experiment folder (where its .git/.here/.Rproj marker sits), but `data_dir`
     # (from note frontmatter) usually points DEEPER, at experiment/data/. So walk UP
@@ -57,9 +77,15 @@ def _manifests(analysis_dir: str) -> list[str]:
     # ancestor's own outputs/ means we can never pull in a SIBLING experiment's
     # MANIFEST; the marker stop keeps us from escaping the experiment on the rare
     # layout with no closer marker.
+    #
+    # walk_up=False for PROJECT scope: a project's data_root IS the root, so climbing
+    # is never right and is actively dangerous — sub-project data_roots frequently sit
+    # inside a parent project's git repo (e.g. "Some Paper/Some Screen" under
+    # "Some Paper/.git"), so the marker stop would sail past the project boundary and
+    # silently merge the PARENT's figures into this project's index.
     m: set[str] = set()
     d = os.path.normpath(os.path.abspath(analysis_dir))
-    for _ in range(6):  # generous bound; real depth is 1–2
+    for _ in range(6 if walk_up else 1):  # generous bound; real depth is 1–2
         m |= set(glob.glob(os.path.join(d, "outputs", "MANIFEST.jsonl")))  # new layout
         if any(os.path.exists(os.path.join(d, mk)) for mk in (".git", ".here")) \
                 or glob.glob(os.path.join(d, "*.Rproj")):
@@ -78,13 +104,13 @@ def _rasterizable(e) -> bool:
     return p.endswith(".pdf") or p.endswith(".png") or p.endswith(".svg")
 
 
-def _load_versions(analysis_dir: str) -> dict:
+def _load_versions(analysis_dir: str, walk_up: bool = True) -> dict:
     """{(channel, title): [all MANIFEST entries, each with _path + _channel set]}
     across every MANIFEST. `channel` is an orthogonal second coordinate to `title`
     (= intent/consumer, e.g. "note" vs "panel"); entries with NO channel field
     resolve as "note" for back-compat. MANIFEST stays append-only."""
     versions: dict[tuple[str, str], list] = {}
-    for mpath in _manifests(analysis_dir):
+    for mpath in _manifests(analysis_dir, walk_up):
         folder = os.path.dirname(mpath)
         with open(mpath, encoding="utf-8") as f:
             for line in f:
@@ -107,7 +133,7 @@ def _load_versions(analysis_dir: str) -> dict:
 
 
 def resolve_figures(analysis_dir: str, committed_only: bool = False,
-                    channel: str = "note") -> dict:
+                    channel: str = "note", walk_up: bool = True) -> dict:
     """{title: latest render for `channel` whose file exists}, keyed by title alone
     (title is the figure identity). Only entries in the requested `channel` are
     considered, so a figtools "panel" render can never shadow a "note" figure.
@@ -117,7 +143,7 @@ def resolve_figures(analysis_dir: str, committed_only: bool = False,
     exists.
     With committed_only, prefer entries carrying a git_commit (reproducible).
     Sets _missing when nothing exists on disk."""
-    versions = _load_versions(analysis_dir)
+    versions = _load_versions(analysis_dir, walk_up)
     out = {}
     for (ch, t), vs in versions.items():
         if ch != channel:
@@ -152,6 +178,58 @@ def _exp_paths(args):
     qmd = exp.get("analysis_qmd")
     qmd = os.path.abspath(os.path.expanduser(qmd)) if qmd else None
     return eid, data_dir, note_dir, attach, notes, qmd
+
+
+def _project_paths(args):
+    """Resolve a PROJECT to the same shape as `_exp_paths`, so every subcommand works
+    unchanged. Returns (identity, data_dir, note_dir, attach, notes, qmd, walk_up).
+
+    Why this exists: figsync found notes only via `experiment_id` frontmatter, so a
+    project's **planning, proposal and Mission Control notes** — which sit alongside
+    `Experiments/`, not inside it — were unreachable. Those are precisely the notes
+    that carry schematics and design figures, and the resulting dead end is what
+    drives people to hand-place into `attachments/`.
+
+    identity  the projects.yaml key (e.g. `myscreen`), used as the attachment
+              prefix in place of an experiment_id. Distinct namespace by construction,
+              since a key is not an experiment id.
+    note_dir  dirname of `dashboard` (the Mission Control note) — that is the project's
+              note home by definition. Falls back to the parent of `vault_dir`.
+    notes     `*.md` DIRECTLY in note_dir — deliberately NOT recursive, so an
+              experiment's notes and figures stay the experiment's.
+    data_dir  `data_root`, which is the outputs root: project scope never walks up.
+    qmd       None — a project has no single analysis notebook.
+    """
+    cfg = lkconfig.load(args.config) if args.config else lkconfig.load()
+    name = args.project
+    known = sorted(cfg.get("projects", {}))
+    if name not in known:
+        raise SystemExit(f"figsync: no project '{name}' in projects.yaml.\n"
+                         f"  known: {', '.join(known) or '(none)'}")
+    p = lkconfig.project(name, cfg)
+    vault_root = p["_vault_root"]
+    dashboard = p.get("dashboard")
+    note_dir = os.path.dirname(os.path.join(vault_root, dashboard)) if dashboard \
+        else os.path.dirname(os.path.join(vault_root, p["vault_dir"]))
+    note_dir = os.path.abspath(note_dir)
+    if not os.path.isdir(note_dir):
+        raise SystemExit(f"figsync: project '{name}' note dir does not exist:\n  {note_dir}")
+    data_dir = os.path.abspath(os.path.expanduser(p["data_root"]))
+    attach = os.path.join(note_dir, "attachments")
+    notes = [n for n in glob.glob(os.path.join(note_dir, "*.md"))
+             if "Figure provenance" not in os.path.basename(n)]
+    return name, data_dir, note_dir, attach, notes, None, False
+
+
+def _paths(args):
+    """Dispatch to project or experiment scope. `walk_up` rides along because it is a
+    property of the scope, not of the caller: an experiment's data_dir sits below its
+    outputs root, a project's IS the root."""
+    if getattr(args, "project", None):
+        if getattr(args, "exp", None):
+            raise SystemExit("figsync: pass --exp or --project, not both.")
+        return _project_paths(args)
+    return (*_exp_paths(args), True)
 
 
 def _f2_calls(src: str):
@@ -405,6 +483,75 @@ def cmd_place(args, eid, qmd, figs, notes) -> int:
     return 0
 
 
+def _outputs_dir(analysis_dir: str, walk_up: bool = True) -> str:
+    """The experiment's `outputs/` — where `register` puts its copy and appends.
+
+    Prefer an ancestor that ALREADY has outputs/MANIFEST.jsonl so a registered figure
+    lands beside the f2 renders. Failing that, resolve the way f2 resolves
+    `here::here("outputs")`: walk UP to the first project-root marker and take that
+    root's outputs/. Walking up only (never sideways) means we can never land in a
+    sibling experiment. This is the whole reason the wrapper exists — figtools'
+    own default is the *cwd's* git root, which in this vault is often several levels
+    above the experiment."""
+    existing = _manifests(analysis_dir, walk_up)
+    if existing:
+        return os.path.dirname(existing[0])
+    if not walk_up:                       # project scope: data_root IS the root
+        return os.path.join(os.path.abspath(analysis_dir), "outputs")
+    d = os.path.normpath(os.path.abspath(analysis_dir))
+    for _ in range(6):
+        if any(os.path.exists(os.path.join(d, mk)) for mk in (".git", ".here")) \
+                or glob.glob(os.path.join(d, "*.Rproj")):
+            return os.path.join(d, "outputs")
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    raise SystemExit(
+        "figsync register: couldn't locate this experiment's outputs/.\n"
+        "  Looked for an existing outputs/MANIFEST.jsonl, then a project-root marker\n"
+        f"  (.git / .here / *.Rproj), walking up from:\n    {analysis_dir}\n"
+        "  Fix: run one f2 render first, or add a .here file at the experiment root.")
+
+
+def cmd_register(args, eid, data_dir, figs, walk_up: bool = True) -> int:
+    """Adopt an existing image file as a registered figure for this experiment."""
+    from figtools.register import register_figure
+
+    title, src = args.title, args.file
+    if not title or not src:
+        print("usage: figtracer figsync register <title> --file <path> "
+              "[--generator NAME] [--source-kind KIND] [--no-embed] [-y]")
+        return 2
+    src = os.path.abspath(os.path.expanduser(src))
+    if not os.path.isfile(src):
+        print(f"figsync register: no such file: {src}")
+        return 2
+
+    outputs = _outputs_dir(data_dir, walk_up)
+    if title in figs:
+        print(f"  note: '{title}' already has {figs[title].get('_n', 0)} registered "
+              f"render(s); this adds a newer one (MANIFEST is append-only).\n")
+    if not args.yes:
+        print(f"would register {eid} figure '{title}'  [DRY RUN — pass -y to write]")
+        print(f"  source    {src}")
+        print(f"  outputs   {outputs}")
+        return 0
+
+    rec = register_figure(src, title=title, outputs=outputs,
+                          embed=not args.no_embed, channel="note",
+                          source_kind=args.source_kind, generator=args.generator)
+    print(f"registered {eid} figure '{title}'")
+    print(f"  source    {rec['source_path']}  ({rec['source_kind']})")
+    print(f"  copied to {os.path.join(outputs, rec['rel_path'])}")
+    print(f"  embed={rec['embed']}  generator={rec['generator'] or '-'}  "
+          f"src-git={rec.get('source_git_commit') or '-'}")
+    scope = "--project" if getattr(args, "project", None) else "--exp"
+    print(f"\n  next: figtracer figsync place {title} {scope} {eid} --note \"<Note.md>\" -y")
+    print(f"        figtracer figsync sync {scope} {eid} -y")
+    return 0
+
+
 def _render_siblings(fig_path: str) -> list[str]:
     """All artifacts of one f2 render sharing a timestamp+title stem: the figure
     file itself, its other-format twin, the saveRData .RData and the saveExcel
@@ -437,7 +584,8 @@ def _to_trash(paths: list[str]) -> None:
         shutil.move(p, dest)
 
 
-def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False) -> dict:
+def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False,
+                      walk_up: bool = True) -> dict:
     """For each (channel, title), keep the newest `keep` renders that exist on disk
     and trash all older ones (+ each render's siblings). MANIFEST.jsonl is left
     intact (append-only provenance; resolve_figures tolerates the now-dangling
@@ -445,7 +593,7 @@ def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False) -
 
     Guard: the newest rasterizable (svg/pdf/png) render of a channel is NEVER
     trashed, even if it sorts beyond `keep`."""
-    versions = _load_versions(analysis_dir)
+    versions = _load_versions(analysis_dir, walk_up)
     drop, per_title = [], []
     for (ch, t), vs in versions.items():
         on_disk = [e for e in vs if os.path.exists(e["_path"])]
@@ -473,8 +621,8 @@ def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False) -
             "files": drop, "freed": freed, "keep": keep}
 
 
-def cmd_prune(analysis_dir, keep, execute) -> int:
-    r = prune_old_renders(analysis_dir, keep=keep, execute=execute)
+def cmd_prune(analysis_dir, keep, execute, walk_up=True) -> int:
+    r = prune_old_renders(analysis_dir, keep=keep, execute=execute, walk_up=walk_up)
     mb = r["freed"] / 1e6
     if not r["files"]:
         print(f"nothing to prune — every title already has <= {keep} render(s) on disk.")
@@ -493,9 +641,12 @@ def cmd_prune(analysis_dir, keep, execute) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="figtracer figsync",
                                  description="Sync lab-note figures to the latest registered render.")
-    ap.add_argument("action", choices=["index", "drift", "sync", "place", "prune"])
-    ap.add_argument("title", nargs="?", help="figure title (for `place`)")
+    ap.add_argument("action", choices=["index", "drift", "sync", "place", "register", "prune"])
+    ap.add_argument("title", nargs="?", help="figure title (for `place` / `register`)")
     ap.add_argument("--exp", help="experiment_id (default: resolve from current directory)")
+    ap.add_argument("--project", help="projects.yaml key — operate on the PROJECT's own notes "
+                                      "(planning / proposal / Mission Control) instead of an "
+                                      "experiment. Mutually exclusive with --exp.")
     ap.add_argument("--config", help="path to projects.yaml")
     ap.add_argument("--committed-only", action="store_true",
                     help="resolve 'latest' to the newest git-committed render (reproducible)")
@@ -505,15 +656,22 @@ def main(argv=None) -> int:
                     help="place: embed syntax (default from labkit config `link_style`, else html). "
                          "html = portable + width; markdown = portable no width; obsidian = wikilink")
     ap.add_argument("--caption", help="place: italic caption line under the embed")
+    ap.add_argument("--file", help="register: image to adopt (.svg/.pdf/.png)")
+    ap.add_argument("--generator", help="register: what made it (e.g. 'Illustrator', 'render_flow.py')")
+    ap.add_argument("--source-kind", default="external-file", dest="source_kind",
+                    help="register: provenance category shown in the index (default: external-file)")
+    ap.add_argument("--no-embed", action="store_true",
+                    help="register: record without embed=TRUE (stays out of `sync`)")
     ap.add_argument("--dpi", type=int, default=300, help="raster DPI (default 300)")
     ap.add_argument("--keep", type=int, default=1,
                     help="prune: newest renders to keep per title (default 1)")
     ap.add_argument("-y", "--yes", action="store_true", help="execute (sync/place/prune default to a dry run)")
     args = ap.parse_args(argv)
 
-    eid, data_dir, note_dir, attach, notes, qmd = _exp_paths(args)
-    figs = resolve_figures(data_dir, committed_only=args.committed_only)
-    print(f"experiment {eid} — {len(figs)} figure title(s) in MANIFEST(s); {len(notes)} note(s)\n")
+    eid, data_dir, note_dir, attach, notes, qmd, walk_up = _paths(args)
+    figs = resolve_figures(data_dir, committed_only=args.committed_only, walk_up=walk_up)
+    scope = "project" if args.project else "experiment"
+    print(f"{scope} {eid} — {len(figs)} figure title(s) in MANIFEST(s); {len(notes)} note(s)\n")
 
     if args.action == "index":
         cmd_index(figs)
@@ -523,8 +681,10 @@ def main(argv=None) -> int:
         return 0
     if args.action == "place":
         return cmd_place(args, eid, qmd, figs, notes)
+    if args.action == "register":
+        return cmd_register(args, eid, data_dir, figs, walk_up)
     if args.action == "prune":
-        return cmd_prune(data_dir, args.keep, args.yes)
+        return cmd_prune(data_dir, args.keep, args.yes, walk_up)
     return cmd_sync(figs, eid, attach, note_dir, notes, args.dpi, args.yes)
 
 

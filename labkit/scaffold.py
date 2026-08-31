@@ -20,6 +20,29 @@ def _slug(title: str) -> str:
     return re.sub(r"[\s_]+", "-", s)[:48] or "experiment"
 
 
+def _check_id(exp_id: str, vault_exp_dir: str) -> str:
+    """Validate a hand-supplied experiment id.
+
+    The id becomes a folder name in two roots and a filename stem, so it has to be safe as a
+    path component and unique. Rejecting here gives a clear error instead of a half-scaffolded
+    tree spread across the vault and the data root.
+    """
+    exp_id = exp_id.strip()
+    if not exp_id:
+        raise ValueError("--id cannot be empty")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", exp_id):
+        raise ValueError(
+            f"--id {exp_id!r} is not usable as a folder name: use letters, digits, dot, dash "
+            "and underscore only, starting with a letter or digit.")
+    if os.path.isdir(vault_exp_dir):
+        for name in os.listdir(vault_exp_dir):
+            if name == exp_id or name.startswith(exp_id + " "):
+                raise ValueError(
+                    f"--id {exp_id!r} already exists in {vault_exp_dir} (as {name!r}). "
+                    "Pick another id or remove the existing experiment first.")
+    return exp_id
+
+
 def _next_id(vault_exp_dir: str, project: str, date: str) -> str:
     """PROJ-YYYY-MM-DD-<A,B,...> — next free letter for the day."""
     base = f"{project}-{date}-"
@@ -41,6 +64,15 @@ def _fill(template: str, mapping: dict) -> str:
     return template
 
 
+# ⚠ CHUNK LABELS USE THE `#| label:` FORM, NOT `` ```{r name} ``. This is not a style choice.
+# Positron's Outline panel gets .qmd symbols from the Quarto extension's LSP, and that code reads
+# ONLY the magic comment:
+#     let g = f.data.match(/(?:#|\/\/|)\| label:\s+(.+)/), v = g ? g[1] : "(code cell)";
+# The legacy inline info-string is never consulted, so every chunk renders as a useless
+# "(code cell)" row. Upstream has declined to support the inline form (quarto-dev/quarto#167,
+# closed "out of scope"; posit-dev/positron#6977, closed "expected"), so `#| label:` is the only
+# route and always will be. knitr treats the two forms identically — both land in params$label —
+# so opts_current$get("label") and f2()'s title fallback are unaffected.
 def _qmd_stub(exp_id: str, title: str, data_dir: str, platform: str = "other") -> str:
     return f'''---
 title: "{exp_id} — {title}"
@@ -51,7 +83,8 @@ analysis:
   share: [internal]
 ---
 
-```{{r setup}}
+```{{r}}
+#| label: setup
 here::i_am("analysis/{exp_id}.qmd")
 source("~/code/seekit/tools/reload_helpers.R")
 if (exists("start_session_log")) start_session_log("session.log")
@@ -62,13 +95,15 @@ data_dir <- "{data_dir}"
 
 # Load
 
-```{{r load}}
+```{{r}}
+#| label: load
 # sce <- qs_read(file.path(data_dir, "<object>.qs2"))
 ```
 
 # Figures
 
-```{{r first-figure}}
+```{{r}}
+#| label: first-figure
 # p <- plotDR2(sce, dr = "UMAP", color_by = "...")
 # f2(p, w = 10, h = 6, format = "svg", embed = TRUE)
 ```
@@ -110,7 +145,7 @@ def _ensure_render_gitignored(exp_root: str) -> None:
 
 def new(project: str, title: str, platform: str | None = None,
         cfg: dict | None = None, stamp: str | None = None,
-        existing_data: str | None = None) -> dict:
+        existing_data: str | None = None, exp_id: str | None = None) -> dict:
     p = config.project(project, cfg)
     now = datetime.strptime(stamp, "%Y-%m-%d") if stamp else datetime.now()
     date = now.strftime("%Y-%m-%d")
@@ -120,7 +155,11 @@ def new(project: str, title: str, platform: str | None = None,
     vault_root = p["_vault_root"]
     vault_exp_dir = os.path.join(vault_root, p["vault_dir"])
     os.makedirs(vault_exp_dir, exist_ok=True)
-    exp_id = _next_id(vault_exp_dir, project, date)
+    # A hand-supplied id wins. Some projects number their runs by hand (EXP01..EXP04)
+    # and were renaming the generated PROJECT-YYYY-MM-DD-A tree in both roots after every
+    # scaffold. Renaming was always safe -- the hub is resolved by its `role: hub` frontmatter,
+    # not its filename -- but it is a manual step that can be skipped instead.
+    exp_id = _check_id(exp_id, vault_exp_dir) if exp_id else _next_id(vault_exp_dir, project, date)
     slug = _slug(title)
 
     # vault note folder + attachments. The hub is named as a **folder note** (stem == its
@@ -202,7 +241,8 @@ def new(project: str, title: str, platform: str | None = None,
 def run(args) -> int:
     cfg = config.load(args.config) if args.config else None
     res = new(args.project, args.title, platform=args.platform, cfg=cfg, stamp=args.stamp,
-              existing_data=getattr(args, "data_dir", None))
+              existing_data=getattr(args, "data_dir", None),
+              exp_id=getattr(args, "exp_id", None))
     from . import index_cmd
     idx = index_cmd.rebuild(args.project, cfg=cfg)
     res["dashboard"] = idx.get("dashboard")
