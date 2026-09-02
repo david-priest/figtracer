@@ -1,7 +1,7 @@
 # Full experiment system (optional)
 
 This guide adds experiment scaffolding, an Obsidian-compatible vault, a project dashboard,
-protocols, and close-the-loop sync. None of it is required for `figtracer demo` or for saving
+and close-the-loop sync. None of it is required for `figtracer demo` or for saving
 figures into `MANIFEST.jsonl`; start with the [five-minute demo](GETTING_STARTED.md) first.
 
 ## One-time setup
@@ -116,8 +116,6 @@ indicates confirmation is required. Run `figtracer <command> -h` for the exact o
 
 - `figtracer fig <subcommand>` — inspect, normalize, assemble, check, render, verify, embed, or
   watch figures.
-- `figtracer protocol` — run an experiment-local `build_protocol.py` when one is present. It is
-  currently a legacy bring-your-own-renderer wrapper; see [Protocols](PROTOCOLS.md).
 - `figtracer data` — scan and register analysis objects.
 - `figtracer doctor` — apply profile-aware checks to analysis documents; see
   [Analysis doctor](ANALYSIS_DOCTOR.md).

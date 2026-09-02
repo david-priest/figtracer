@@ -5,7 +5,7 @@
   demo                   -> figtracer.demo      (zero-config figure-to-note tour)
   new / index / init     -> labkit
   fig <sub>              -> figtools
-  protocol               -> figtracer.protocol  (renders an experiment's protocol.yaml)
+  protocol               -> figtracer.protocol  (shim: forwards to protokit)
   sync                   -> figtracer.sync       (the close-the-loop roundup)
   vault <sub>            -> figtracer.vault      (whole-vault health checks)
 
@@ -32,8 +32,8 @@ usage: figtracer <command> [args]
   figures (figtools)
     fig <sub>     register | inspect | normalize | assemble | check | render | verify | embed | watch | optimise | doctor
 
-  protocols
-    protocol      render protocol.yaml -> xlsx + shadow.md
+  protocols (moved to protokit, 2026-09-02)
+    protocol      forwards to `protokit` when it is installed
 
   canvas / merges
     merge-table   extract an Obsidian advanced-canvas merge table -> CSV (the

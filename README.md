@@ -43,8 +43,8 @@ in git.
 
 ![figtracer maps out as two tiers: the figure loop you benefit from immediately, and an optional full experiment system on top](docs/figtracer-map.svg)
 
-The figure loop is one function call in an analysis you already have. Experiment scaffolding,
-protocols, a project dashboard and the end-of-session `sync` are a separate layer on top,
+The figure loop is one function call in an analysis you already have. Experiment scaffolding, a project
+dashboard and the end-of-session `sync` are a separate layer on top,
 described below, and the loop does not depend on them.
 
 ## The figure loop
@@ -88,14 +88,13 @@ with `seekit` and one in Python with `scanpy`, and places figures from both in o
 
 ## The full experiment system (optional)
 
-figtracer can also scaffold experiments, render bench protocols, maintain a project dashboard
+figtracer can also scaffold experiments, maintain a project dashboard
 and close out a session. None of this is needed for the demo or the figure loop.
 
 ```text
 figtracer new       scaffold a fully cross-linked experiment: notes + data/analysis/outputs dirs
 figtracer index     rebuild a project's Mission Control dashboard (every experiment by status)
 figtracer figrun    re-render a notebook's figure chunks headlessly, from the .qmd itself
-figtracer protocol  call an experiment-local renderer for protocol.yaml (legacy wrapper)
 figtracer data      a content-addressed registry of analysis objects (.qs2/.rds/.RData)
 figtracer doctor    profile-aware QMD checks for internal, collaborator, and publication views
 figtracer sync      end-of-session roundup: figures -> note -> dashboard -> git commit
@@ -136,9 +135,9 @@ figrun:
   reload_calls: [readRDS]
 ```
 
-Follow the [full experiment-system setup](docs/FULL_SYSTEM.md) when you want that layer. The
-current protocol command is a bring-your-own-renderer wrapper; packaging a general protocol
-renderer remains future work.
+Follow the [full experiment-system setup](docs/FULL_SYSTEM.md) when you want that layer.
+Bench protocols moved to a separate repository, protokit, on 2026-09-02; `figtracer protocol`
+forwards to it for one release.
 `labkit` (scaffolding + Mission Control) and `figtools` (figure assembly) also ship as standalone
 console scripts; `figtracer` is a convenience front door over them. The
 [analysis doctor](docs/ANALYSIS_DOCTOR.md) gives humans, agents, and CI a named, suppressible
@@ -202,7 +201,7 @@ pytest
 ## Layout
 
 ```text
-figtracer/      umbrella package (CLI, sync, protocol, savefig, data, export)
+figtracer/      umbrella package (CLI, sync, savefig, data, export)
 labkit/         experiment scaffolding + Mission Control + ingest (+ templates, config)
 figtools/       figure assembly, embed, and integrity checks
 r/              dependency-free R saveFig() shim

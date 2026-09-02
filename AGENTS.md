@@ -36,7 +36,6 @@ analysis runs; a manifest-tracked figure re-syncs.
 - **Close out a session:** `figtracer sync` — re-embeds figures into the note, updates its
   status/log, git-commits the data folder (never pushes), and rebuilds the project dashboard.
   It is **dry-run by default**; pass `-y` only once the user has confirmed.
-- **Render a bench protocol:** `figtracer protocol` on a `protocol.yaml`.
 - **Share notes with a collaborator:** `figtracer export` (a clean PDF; drops the internal log).
 
 ## Rules of thumb

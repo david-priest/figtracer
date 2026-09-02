@@ -6,6 +6,16 @@ All notable changes to figtracer are documented here. The format is based on
 
 ## [Unreleased]
 
+### Removed
+
+- The protocol system moved to its own repository, protokit, on 2026-09-02: the
+  `figtracer protocol` renderer wrapper, `docs/PROTOCOLS.md`, the agent skill catalogue, and the
+  packaged renderer, shared checker, carry-forward audit and column-width solver that were still
+  in review. It has a different user, a different artefact and a different growth path from the
+  figure loop. `figtracer protocol` remains for one release as a shim that forwards to `protokit`
+  when it is installed and says where the command went otherwise. `figtracer new` still creates
+  the `protocol/` folder; that folder convention is the only thing the two tools share.
+
 ## [0.3.0] — 2026-09-02
 
 ### Added

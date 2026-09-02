@@ -1,10 +1,10 @@
 cff-version: 1.2.0
 message: "If you use figtracer, please cite it as below."
-title: "figtracer: plain-text, provenance-tracked lab records from bench protocol to publication figure"
+title: "figtracer: plain-text, provenance-tracked lab records from analysis code to lab-note figure"
 abstract: >-
-  A command-line toolkit that keeps a lab's records — bench protocols, analysis figures,
-  written lab notes, and project state — consistent, versioned, and plain-text, threading
-  each figure to the code and git commit that produced it across R and Python.
+  A command-line toolkit that keeps a lab's records — analysis figures, written lab notes,
+  and project state — consistent, versioned, and plain-text, threading each figure to the
+  code and git commit that produced it across R and Python.
 type: software
 authors:
   - given-names: "David G."

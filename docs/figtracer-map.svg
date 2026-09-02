@@ -1,6 +1,6 @@
 <svg viewBox="0 0 760 416" xmlns="http://www.w3.org/2000/svg" role="img" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
   <title>figtracer: start with the figure loop, grow into the full system</title>
-  <desc>Tier one, the figure loop you benefit from immediately: your analysis in R or Python saves figures which flow through MANIFEST.jsonl into a living lab note that auto-resyncs. Tier two, optional: figtracer new, protocol.yaml, Mission Control, and figtracer sync.</desc>
+  <desc>Tier one, the figure loop you benefit from immediately: your analysis in R or Python saves figures which flow through MANIFEST.jsonl into a living lab note that auto-resyncs. Tier two, optional: figtracer new, figrun, Mission Control, and figtracer sync.</desc>
 
   <defs>
     <marker id="ah" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">
@@ -44,7 +44,7 @@
   <text x="115" y="352" text-anchor="middle" font-size="11" fill="#6b7280">scaffold experiment</text>
 
   <rect x="212" y="296" width="162" height="82" rx="9" fill="#ffffff" stroke="#d4d4d8" stroke-width="1.5"/>
-  <text x="293" y="332" text-anchor="middle" font-size="13" font-weight="700" fill="#111827">protocol.yaml</text>
+  <text x="293" y="332" text-anchor="middle" font-size="13" font-weight="700" fill="#111827">figrun</text>
   <text x="293" y="352" text-anchor="middle" font-size="11" fill="#6b7280">→ bench sheet</text>
 
   <rect x="390" y="296" width="162" height="82" rx="9" fill="#ffffff" stroke="#d4d4d8" stroke-width="1.5"/>

@@ -1,7 +1,7 @@
 [project]
 name = "figtracer"
 version = "0.3.0"
-description = "Keep the figures in a Markdown lab note in step with the R or Python code that made them, with a manifest per figure save and a sync per note; optional experiment scaffolding, protocols and a project dashboard on top."
+description = "Keep the figures in a Markdown lab note in step with the R or Python code that made them, with a manifest per figure save and a sync per note; optional experiment scaffolding, headless figure re-rendering and a project dashboard on top."
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{name = "David G. Priest"}]

@@ -94,10 +94,9 @@ or `figtracer figsync sync` can keep figures in a real Markdown note current.
 ## Grow only when it helps
 
 The demo deliberately skips Obsidian integration, experiment folders, project dashboards,
-protocol rendering, and end-of-session sync. They are optional layers, not prerequisites.
+headless re-rendering, and end-of-session sync. They are optional layers, not prerequisites.
 
 - [Full experiment-system setup](FULL_SYSTEM.md) — vault configuration, project registry,
   scaffolding, Mission Control, and the complete analysis loop.
 - [CyTOF example](../examples/cytof) — public R and Python analyses feeding one note.
 - [Analysis doctor](ANALYSIS_DOCTOR.md) — reproducibility checks for analysis documents.
-- [Protocols](PROTOCOLS.md) — render parameterised bench protocols.
