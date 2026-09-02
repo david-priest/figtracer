@@ -4,13 +4,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/david-priest/figtracer/actions/workflows/ci.yml/badge.svg)](https://github.com/david-priest/figtracer/actions/workflows/ci.yml)
 
-**Your write-up lives outside your analysis. Keep its figures honest.**
+figtracer keeps the figures in a Markdown lab note in step with the R or Python code that made
+them. Each figure save appends a line to a manifest recording the figure's title, size, source
+file, generator and git commit. A note embeds figures by title, and one command replaces each
+embedded figure with its newest render and writes a provenance table beside it.
 
-figtracer is a Git-native figure-to-note loop for R and Python. When the record of what your
-results *mean* is a separate document — a Markdown lab note, a vault, a manuscript draft — no
-render step keeps its figures current. figtracer connects each rendered figure to its analysis
-source and commit, then keeps that note's figure block current across the gap, so a figure in
-the note can never quietly lag the code that made it.
+It exists because the write-up usually lives in a different document from the analysis. A lab
+note, an Obsidian vault or a manuscript draft is not rebuilt when the notebook is re-run, so its
+figures go stale and nothing reports it. figtracer is the render step for that document.
 
 ```bash
 uv tool install "git+https://github.com/david-priest/figtracer.git"
@@ -18,34 +19,38 @@ figtracer demo
 ```
 
 Open `figtracer-demo/Lab note.md`, edit the generated `analysis.py`, and run `figtracer demo`
-again. The figure changes and the existing note block is replaced in place. The first run needs
-no configuration, Obsidian vault, project registry, R, external dataset, Chrome, or Matplotlib.
+again. The figure in the note changes and the existing block is replaced rather than duplicated.
+The demo needs no configuration, vault, project registry, R, external dataset, Chrome or
+Matplotlib.
 
 ![Before rerunning, a Markdown lab note contains a blue chart connected to its analysis and manifest; after editing the data and rerunning, that same block contains the updated orange chart rather than a duplicate](docs/figtracer-before-after.svg)
 
-[Take the five-minute tour](docs/GETTING_STARTED.md) or inspect the frozen
-[`examples/minimal`](examples/minimal) output.
+The [five-minute guide](docs/GETTING_STARTED.md) walks through the same loop, and
+[`examples/minimal`](examples/minimal) holds a frozen copy of its output.
 
 ## How it works
 
-It rests on one small contract. Each time you save or register a figure — from R, Python, or an
-external renderer — one line is appended to an append-only `MANIFEST.jsonl`: the figure's title,
-size, source file, generator, and the exact git commit at that moment. figtracer then resolves
-figures by title, embeds them into a Markdown note with a provenance table, and re-syncs that note
-whenever you re-run — so the note is a *derived view* of your analysis, never a hand-duplicated
-copy. Everything lives as plain text in git.
+Every figure save, from R, Python or a file registered from another renderer, appends one line to
+`MANIFEST.jsonl` in the analysis's `outputs/` folder: the figure's title, size, source file,
+generator and the git commit at that moment. The manifest is append-only, so it also holds each
+figure's history.
+
+A note embeds a figure by title. `figtracer figsync sync` resolves each embedded title to its
+newest render, rasterises it to a stable filename beside the note, and writes a provenance table
+listing the source and commit of every figure in the note. After the analysis is re-run, the same
+command brings the note up to date without touching its prose. Everything involved is plain text
+in git.
 
 ![figtracer maps out as two tiers: the figure loop you benefit from immediately, and an optional full experiment system on top](docs/figtracer-map.svg)
 
-Start with the figure loop — one function call in the analysis you already have. Reach for the
-rest of the system (experiment scaffolding, protocols, dashboard, close-the-loop `sync`) only if
-and when you want it.
+The figure loop is one function call in an analysis you already have. Experiment scaffolding,
+protocols, a project dashboard and the end-of-session `sync` are a separate layer on top,
+described below, and the loop does not depend on them.
 
-## Start small — figures → living notes (the wedge)
+## The figure loop
 
-The one thing to try first. It drops into **any** existing analysis — any directory layout,
-R **or** Python, notes in any Markdown tool — with a single function call. No buy-in to the
-rest of figtracer.
+This is the part to try first. It works in an existing analysis with any directory layout, in R
+or Python, with notes in any Markdown editor, and needs nothing else from figtracer.
 
 ```r
 # R — seekit's saveFig(), or figtracer's bundled dependency-free shim (no seekit needed):
@@ -65,7 +70,7 @@ figtracer fig register method_flow.svg --title fixation_method_flow \
   --source-kind generated-svg --generator "python render_method_flow.py"
 ```
 
-Then the figure is provenance-tracked and the note follows the latest render:
+The figure is then in the manifest, and the note can follow its latest render:
 
 - `figtracer fig embed <spec.yaml>` — compose panels into a figure and write it into a note
   (with a provenance table); `figtracer fig watch` keeps it live.
@@ -73,20 +78,18 @@ Then the figure is provenance-tracked and the note follows the latest render:
 - `figtracer fig doctor` — integrity-check the manifest so a title never resolves to a stale or
   missing figure.
 
-Embeds are **portable by default** (standard Markdown / HTML, so they render anywhere);
-`--link-style obsidian` gives Obsidian wikilinks with the native resize handle. A Python analysis
+Embeds are standard Markdown or HTML by default, so they render anywhere. `--link-style obsidian`
+writes Obsidian wikilinks instead, which carry the native resize handle. A Python analysis
 must have `figtracer` installed in its own environment; command-line tools installed by `uv tool`
 are intentionally isolated.
 
-**See it on real public data:** [`examples/cytof`](examples/cytof) analyses two public CyTOF
-datasets — one in R (`seekit`), one in Python (`scanpy`) — and threads figures from **both**
-into one lab note. That is the whole idea, end to end, on data anyone can download.
+[`examples/cytof`](examples/cytof) runs the loop on two public CyTOF datasets, one analysed in R
+with `seekit` and one in Python with `scanpy`, and places figures from both in one lab note.
 
-## Go further — the full experiment system (opt-in)
+## The full experiment system (optional)
 
-If you want more than the figure loop, figtracer can also scaffold experiments, render bench
-protocols, maintain a Mission Control dashboard, and close out a session. None of this is
-required for the five-minute demo or the save-side figure seam.
+figtracer can also scaffold experiments, render bench protocols, maintain a project dashboard
+and close out a session. None of this is needed for the demo or the figure loop.
 
 ```text
 figtracer new       scaffold a fully cross-linked experiment: notes + data/analysis/outputs dirs
@@ -111,15 +114,15 @@ figtracer figrun --exp EXP01 --changed       # every render older than the noteb
 figtracer figrun --exp EXP01 --awaiting      # flagged embed=TRUE, but no render on record
 ```
 
-It executes chunk bodies taken **verbatim from the `.qmd`, by label**, so it cannot draw anything
-that is not already in the notebook — the notebook remains the definition of what the figure is,
-and `figrun` is only the thing that runs it. Prerequisites are worked out by dataflow analysis of
-the parse tree, so there is no chunk graph to maintain by hand.
+It executes chunk bodies taken verbatim from the `.qmd`, by label, so it cannot draw anything that
+is not already in the notebook. The notebook remains the definition of what the figure is, and
+`figrun` only runs it. Prerequisites are worked out by dataflow analysis of the parse tree, so
+there is no chunk graph to maintain by hand.
 
-Chunks that rebuild the analysis object itself — clustering, embedding, merging, saving the
-checkpoint — are skipped unless you name them. Re-running those invalidates every figure drawn at
-a level applied afterwards, and can destroy state that no chunk can reproduce, such as gates drawn
-by hand in an interactive app. Rendering a figure should never be able to do that by accident.
+Chunks that rebuild the analysis object itself, such as clustering, embedding, merging and saving
+the checkpoint, are skipped unless you name them. Re-running those invalidates every figure drawn
+at a level applied afterwards, and can destroy state that no chunk can reproduce, such as gates
+drawn by hand in an interactive app.
 
 `figrun` is R-only for now. The R side needs `jsonlite`, `codetools`, `here` and `knitr`. Which
 calls count as "rebuilds the object" or "reloads the checkpoint", and how R is launched, are set
@@ -145,8 +148,8 @@ checklist while keeping one detailed internal QMD as the source of truth.
 
 figtracer is a good fit when:
 
-- the write-up lives in a different document from the analysis — a Markdown note, an Obsidian
-  vault, a manuscript — so no render step can keep its figures current;
+- the write-up lives in a different document from the analysis, such as a Markdown note, an
+  Obsidian vault or a manuscript, so no render step keeps its figures current;
 - analysis happens in R or Python and figures change as the code changes;
 - the durable record should be readable Markdown, YAML, SVG, and JSONL in git;
 - figures from multiple scripts or languages need to converge on one note;
@@ -155,17 +158,16 @@ figtracer is a good fit when:
 
 It is not the right primary tool when:
 
-- your figures are generated inline by the document that displays them (a knitted
-  Quarto/R Markdown/Jupyter render) — that already guarantees the figure matches the code,
-  and you don't need this;
+- your figures are generated inline by the document that displays them (a knitted Quarto,
+  R Markdown or Jupyter render), which already keeps the figure matched to the code;
 - you need regulated ELN controls, electronic signatures, audit certification, or validated
   compliance workflows;
 - you need a LIMS for sample inventory, freezer locations, instruments, or chain of custody;
 - your team requires a GUI-only, no-code workflow; or
 - the analysis and its notes should not live in files or git.
 
-figtracer can sit beside an ELN or LIMS; it does not claim to replace those systems. Its narrow
-job is to keep code-generated figures, provenance, and Markdown notes connected.
+figtracer can sit beside an ELN or LIMS and does not replace them. Its job is to keep
+code-generated figures, their provenance and Markdown notes connected.
 
 ## Optional: let a coding agent operate it
 
