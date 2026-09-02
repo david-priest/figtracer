@@ -41,3 +41,28 @@ def test_frontmatter_must_be_at_file_start(tmp_path):
     # A leading blank line means the `^---` anchor won't match -> {}.
     md = _write(tmp_path, "\n---\nexperiment_id: ABC-1\n---\n")
     assert config.read_frontmatter(md) == {}
+
+
+# ── note_dirs: a project's notes need not live under one folder ──────────────
+
+def test_note_dirs_accepts_a_string():
+    p = {"_vault_root": "/vault", "vault_dir": "Proj/Experiments"}
+    assert config.note_dirs(p) == ["/vault/Proj/Experiments"]
+
+
+def test_note_dirs_accepts_a_list_and_keeps_order():
+    """The FIRST entry is the primary — `labkit new` scaffolds there."""
+    p = {"_vault_root": "/vault",
+         "vault_dir": ["Proj/Experiments", "Proj/Dataset comparisons"]}
+    assert config.note_dirs(p) == ["/vault/Proj/Experiments",
+                                   "/vault/Proj/Dataset comparisons"]
+
+
+def test_note_dirs_explicit_root_wins_over_embedded():
+    """vault.py iterates raw projects dicts, which carry no _vault_root."""
+    assert config.note_dirs({"vault_dir": "A"}, "/other") == ["/other/A"]
+
+
+def test_note_dirs_missing_or_empty_is_empty_not_an_error():
+    assert config.note_dirs({"_vault_root": "/v"}) == []
+    assert config.note_dirs({"_vault_root": "/v", "vault_dir": []}) == []

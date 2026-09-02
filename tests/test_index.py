@@ -56,3 +56,27 @@ def test_table_links_actual_note_stem_and_panel():
     assert "[[Renamed front page]]" in table
     assert "panel: [[Panels/demo.csv]]" in table
     assert "[[DEMO-1]]" not in table
+
+
+def test_collect_finds_notes_outside_the_experiments_folder(tmp_path, monkeypatch):
+    """A note filed in a second vault_dir must reach Mission Control.
+
+    Before `note_dirs`, only the single `vault_dir` was globbed, so a comparison
+    note filed alongside its siblings in `Dataset comparisons/` was invisible to
+    index / sync / figsync — the note existed and nothing reported it missing.
+    """
+    a = _write_note(tmp_path / "Experiments" / "DEMO-1 run" / "DEMO-1 run.md",
+                    "DEMO-1", title="A run", role="hub")
+    b = _write_note(tmp_path / "Dataset comparisons" / "Someone 2026" / "Someone 2026.md",
+                    "DEMO-2", title="A comparison", role="hub")
+
+    seen = {}
+    def fake_glob(pattern):
+        seen.setdefault("patterns", []).append(pattern)
+        return [a] if "Experiments" in pattern else [b]
+    monkeypatch.setattr(index_cmd.glob, "glob", fake_glob)
+
+    rows = index_cmd._collect({"_vault_root": str(tmp_path),
+                               "vault_dir": ["Experiments", "Dataset comparisons"]})
+    assert {r["experiment_id"] for r in rows} == {"DEMO-1", "DEMO-2"}
+    assert len(seen["patterns"]) == 2

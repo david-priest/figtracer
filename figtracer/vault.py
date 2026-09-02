@@ -50,6 +50,7 @@ import os
 import re
 import subprocess
 import sys
+from labkit import config as lkconfig
 
 # Directories that are never content: plugin internals, caches, git, Obsidian's own trash.
 SKIP_DIRS = {".obsidian", ".smart-env", ".trash", ".git", ".stfolder", "node_modules"}
@@ -318,15 +319,13 @@ def experiment_paths(cfg: dict, eid: str) -> tuple[str, list[str]]:
     root = os.path.expanduser(cfg["vault_root"])
     paths: list[str] = []
     for _name, proj in (cfg.get("projects") or {}).items():
-        vault_dir = proj.get("vault_dir")
-        if not vault_dir:
-            continue
-        for note in glob.glob(os.path.join(root, vault_dir, "*", "*.md")):
-            if _experiment_id_of(note) != eid:
-                continue
-            paths.append(os.path.dirname(note))
-            if proj.get("dashboard"):
-                paths.append(os.path.join(root, proj["dashboard"]))
+        for nd in lkconfig.note_dirs(proj, root):
+            for note in glob.glob(os.path.join(nd, "*", "*.md")):
+                if _experiment_id_of(note) != eid:
+                    continue
+                paths.append(os.path.dirname(note))
+                if proj.get("dashboard"):
+                    paths.append(os.path.join(root, proj["dashboard"]))
     return root, sorted({os.path.relpath(x, root) for x in paths if os.path.exists(x)})
 
 

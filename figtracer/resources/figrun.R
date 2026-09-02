@@ -198,6 +198,15 @@ if (isTRUE(PLAN$plan_only)) quit(save = "no", status = 0)
 # ── 3. execute ───────────────────────────────────────────────────────────────
 setwd(PLAN$exp_root)
 
+# Anchor here() to this experiment BY CONSTRUCTION, not by hoping the notebook's
+# own `here::i_am()` chunk lands in the plan. It did on one notebook only because
+# that chunk also assigns a directory the reload reads, so dataflow pulled it in;
+# a notebook whose anchor chunk writes no symbol would fall through to here()'s
+# cwd heuristics and then trip the guard below. Same string the notebook passes,
+# derived from the plan rather than typed.
+if (requireNamespace("here", quietly = TRUE) && !is.null(PLAN$qmd_rel))
+  suppressMessages(here::i_am(PLAN$qmd_rel))
+
 # Bare `p` at the end of a figure chunk auto-prints. Under Rscript there is no
 # graphics device, so R opens the default one and litters Rplots.pdf in the
 # experiment root — four of them turned up after the first runs. A null device
@@ -226,21 +235,39 @@ arm_shadow <- function()
 # resolves to. So f2/saveFig are stubbed out for non-target chunks and restored
 # for targets. The stub records what it swallowed so the run reports it.
 suppressed <- character(0)
-mute_f2 <- function() {
-  stub <- function(...) {
-    a <- list(...)
-    ti <- if (!is.null(a$title)) a$title else {
-      ch <- Filter(is.character, a); if (length(ch)) ch[[1]] else "<untitled>"
-    }
-    suppressed <<- c(suppressed, as.character(ti)[1])
-    invisible(NULL)
+stub_f2 <- function(...) {
+  a <- list(...)
+  ti <- if (!is.null(a$title)) a$title else {
+    ch <- Filter(is.character, a); if (length(ch)) ch[[1]] else "<untitled>"
   }
-  assign("f2", stub, envir = globalenv())
-  assign("saveFig", stub, envir = globalenv())
+  suppressed <<- c(suppressed, as.character(ti)[1])
+  invisible(NULL)
 }
-unmute_f2 <- function()
-  suppressWarnings(rm(list = intersect(c("f2", "saveFig"), ls(globalenv())),
-                      envir = globalenv()))
+# The real writers are normally on the search path (seekit is load_all()ed), so a
+# globalenv stub shadows them and removing it restores them. But seekit's loader
+# has a documented fallback that sys.source()s helpers straight INTO globalenv
+# when load_all disagrees with disk — and then "restore" by rm() deletes the real
+# f2, and the first target chunk dies on "could not find function f2". So: save
+# whatever non-stub binding is there before muting, and put it back after.
+saved_writers <- list()
+mute_f2 <- function() {
+  for (nm in c("f2", "saveFig")) {
+    if (exists(nm, envir = globalenv(), inherits = FALSE)) {
+      cur <- get(nm, envir = globalenv(), inherits = FALSE)
+      if (!identical(cur, stub_f2)) saved_writers[[nm]] <<- cur
+    }
+    assign(nm, stub_f2, envir = globalenv())
+  }
+}
+unmute_f2 <- function() {
+  for (nm in c("f2", "saveFig")) {
+    if (exists(nm, envir = globalenv(), inherits = FALSE) &&
+        identical(get(nm, envir = globalenv(), inherits = FALSE), stub_f2))
+      rm(list = nm, envir = globalenv())
+    if (!is.null(saved_writers[[nm]]))
+      assign(nm, saved_writers[[nm]], envir = globalenv())
+  }
+}
 
 first_target <- TRUE
 for (ch in chunks) {

@@ -17,9 +17,9 @@ def _collect(project_cfg: dict) -> list[dict]:
     per-lineage/compartment notes that carry only the experiment_id to link them (the lab's
     'split a big experiment by lineage' convention). Prefer the current explicit/folder-note
     hub, then the legacy `<exp_id>.md`, so Mission Control agrees with ``figtracer sync``."""
-    vault_exp_dir = os.path.join(project_cfg["_vault_root"], project_cfg["vault_dir"])
     by_id: dict[str, dict] = {}
-    for note in glob.glob(os.path.join(vault_exp_dir, "*", "*.md")):
+    for note in [n for d in config.note_dirs(project_cfg)
+                 for n in glob.glob(os.path.join(d, "*", "*.md"))]:
         fm = config.read_frontmatter(note)
         eid = fm.get("experiment_id")
         if not eid:

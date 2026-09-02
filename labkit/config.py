@@ -77,6 +77,24 @@ def project(name: str, cfg: dict | None = None) -> dict:
     return p
 
 
+def note_dirs(proj: dict, vault_root: str | None = None) -> list[str]:
+    """Every directory a project keeps experiment notes in, as absolute paths.
+
+    `vault_dir` accepts a **string or a list of strings**. Notes do not have to sit
+    under one "Experiments" folder: a project may legitimately keep per-run notes in
+    `Experiments/` and, say, cross-dataset comparison notes in `Dataset comparisons/`,
+    and `figsync` / `sync` / Mission Control should see both. Before this, a note filed
+    anywhere but the single `vault_dir` was invisible to every one of them — the note
+    existed, figures were placed into it, and `drift` reported nothing.
+
+    The FIRST entry is the primary: `labkit new` scaffolds there.
+    """
+    root = vault_root or proj.get("_vault_root") or ""
+    v = proj.get("vault_dir")
+    vs = [v] if isinstance(v, str) else list(v or [])
+    return [os.path.join(root, os.path.expanduser(str(x))) for x in vs]
+
+
 def objects_lockfile(data_dir: str) -> str:
     """Path to an experiment's object registry lockfile (``figtracer-objects.yml``)."""
     return os.path.join(os.path.expanduser(data_dir), "figtracer-objects.yml")

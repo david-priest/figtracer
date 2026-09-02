@@ -108,7 +108,7 @@ that from the command line:
 figtracer figrun --exp EXP01 --list          # what the notebook contains, and how each chunk is classified
 figtracer figrun --exp EXP01 umap-by-group   # re-render named chunks
 figtracer figrun --exp EXP01 --changed       # every render older than the notebook's last edit
-figtracer figrun --exp EXP01 --awaiting      # embedded in a note, but never rendered
+figtracer figrun --exp EXP01 --awaiting      # flagged embed=TRUE, but no render on record
 ```
 
 It executes chunk bodies taken **verbatim from the `.qmd`, by label**, so it cannot draw anything
@@ -120,6 +120,18 @@ Chunks that rebuild the analysis object itself — clustering, embedding, mergin
 checkpoint — are skipped unless you name them. Re-running those invalidates every figure drawn at
 a level applied afterwards, and can destroy state that no chunk can reproduce, such as gates drawn
 by hand in an interactive app. Rendering a figure should never be able to do that by accident.
+
+`figrun` is R-only for now. The R side needs `jsonlite`, `codetools`, `here` and `knitr`. Which
+calls count as "rebuilds the object" or "reloads the checkpoint", and how R is launched, are set
+in an optional `figrun:` block of `~/.config/labkit/config.yaml`; the defaults are one lab's
+idioms (`cluster2`, `qs_save`, `qs_read`, …) and yours will differ:
+
+```yaml
+figrun:
+  runner: Rscript                      # default: rlog if it is on PATH, else Rscript
+  expensive_calls: [runPCA, RunUMAP, FindClusters, saveRDS]
+  reload_calls: [readRDS]
+```
 
 Follow the [full experiment-system setup](docs/FULL_SYSTEM.md) when you want that layer. The
 current protocol command is a bring-your-own-renderer wrapper; packaging a general protocol

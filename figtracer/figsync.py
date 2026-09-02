@@ -210,7 +210,7 @@ def _project_paths(args):
     vault_root = p["_vault_root"]
     dashboard = p.get("dashboard")
     note_dir = os.path.dirname(os.path.join(vault_root, dashboard)) if dashboard \
-        else os.path.dirname(os.path.join(vault_root, p["vault_dir"]))
+        else os.path.dirname(lkconfig.note_dirs(p, vault_root)[0])
     note_dir = os.path.abspath(note_dir)
     if not os.path.isdir(note_dir):
         raise SystemExit(f"figsync: project '{name}' note dir does not exist:\n  {note_dir}")
@@ -232,11 +232,11 @@ def _paths(args):
     return (*_exp_paths(args), True)
 
 
-def _f2_calls(src: str):
-    """Yield the full source text of each f2(...) call, brace-balanced and
-    quote-aware (so parens inside a title string don't break balancing), skipping
-    calls that begin on a commented line."""
-    for m in re.finditer(r"\bf2\s*\(", src):
+def _f2_calls(src: str, name: str = "f2"):
+    """Yield the full source text of each `name`(...) call — f2 by default,
+    saveFig for figrun — brace-balanced and quote-aware (so parens inside a title
+    string don't break balancing), skipping calls that begin on a commented line."""
+    for m in re.finditer(rf"\b{re.escape(name)}\s*\(", src):
         ls = src.rfind("\n", 0, m.start()) + 1
         if src[ls:m.start()].lstrip().startswith("#"):
             continue
@@ -298,8 +298,11 @@ def cmd_index(figs: dict) -> None:
               f"{(e.get('git_commit') or '-')[:8]:8} {t}{miss}")
 
 
+UNPLACED_SHOWN = 15
+
+
 def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
-              attach: str | None = None) -> None:
+              attach: str | None = None, show_all: bool = False) -> None:
     ref = _note_embeds(eid, notes)
     titles = set(figs)
     embed_titles = {t for t, e in figs.items() if e.get("embed")}
@@ -327,8 +330,14 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
         print(f"  [{tag}]  {slug}  ({where})")
     unplaced = sorted(embed_titles - set(ref))
     print(f"\n== embed=TRUE figures (in MANIFEST) not placed in any note ({len(unplaced)}) ==")
-    for t in unplaced:
+    # A notebook that loops f2() over conditions leaves hundreds of embed=TRUE titles
+    # nobody will place (129 on one experiment), and they buried the three lines above
+    # that actually need acting on. Show a sample; --all for the full list.
+    shown = unplaced if (show_all or len(unplaced) <= UNPLACED_SHOWN) else unplaced[:UNPLACED_SHOWN]
+    for t in shown:
         print(f"  UNPLACED  {t}")
+    if len(shown) < len(unplaced):
+        print(f"  … and {len(unplaced) - len(shown)} more (pass --all to list them)")
     print(f"\nsummary: {len(ref)} embeds — {awaiting} awaiting re-run, "
           f"{not_mat} not materialised (run sync), "
           f"{orphan} orphaned (no registered source), {len(unplaced)} unplaced")
@@ -387,26 +396,48 @@ def _write_provenance(eid: str, note_dir: str, mat: dict, ref: dict | None = Non
     return out
 
 
+def _is_current(attachment: str, render: str) -> bool:
+    """The attachment PNG already reflects this render: it exists and is no older
+    than the render file. A newer render (a re-run, or the resolver switching to a
+    different file) has a newer mtime and falls through to re-rasterisation."""
+    try:
+        return os.path.getmtime(attachment) >= os.path.getmtime(render)
+    except OSError:
+        return False
+
+
 def materialize(figs, eid, note_dir, attach, notes, dpi=300, execute=False,
-                channel="note") -> dict:
+                channel="note", force=False) -> dict:
     """Core sync step (reusable by `figtracer sync`). Rasterizes the latest render
     of each figure that is BOTH embed=TRUE AND referenced in a note, overwriting
     the stable attachment PNG (`<eid>_<title>.png` for the note channel), and
-    writes the provenance index. Returns a summary dict; does not print."""
+    writes the provenance index. Returns a summary dict; does not print.
+
+    A figure whose attachment is already newer than its render is reported under
+    `current` and left alone unless `force`. Without this every sync re-ran
+    pdftoppm at 300 dpi for every embedded figure — 33 of them on one experiment —
+    and rewrote every PNG, so the Drive client re-uploaded all of them each time.
+    `force` is the escape hatch for the one thing mtimes cannot see: a `--dpi` change.
+    """
     ref = _note_embeds(eid, notes)
     targets = sorted(t for t, e in figs.items() if e.get("embed") and t in ref)
     unplaced = sorted(t for t, e in figs.items() if e.get("embed") and t not in ref)
     if execute and targets:
         os.makedirs(attach, exist_ok=True)
-    synced, missing, failed, mat = [], [], [], {}
+    synced, current, missing, failed, mat = [], [], [], [], {}
     for t in targets:
         e = figs[t]
         if e.get("_missing") or not os.path.exists(e["_path"]):
             missing.append(t)
             continue
+        dst = os.path.join(attach, _attachment_name(eid, t, channel))
+        if not force and _is_current(dst, e["_path"]):
+            mat[t] = e
+            current.append(t)
+            continue
         if execute:
             try:
-                _rasterize(e["_path"], os.path.join(attach, _attachment_name(eid, t, channel)), dpi)
+                _rasterize(e["_path"], dst, dpi)
             except Exception as exc:  # one bad figure mustn't abort the whole sync
                 failed.append((t, str(exc)))
                 continue
@@ -415,12 +446,12 @@ def materialize(figs, eid, note_dir, attach, notes, dpi=300, execute=False,
     # write provenance whenever there are targets (so it never goes stale), even
     # if some skipped — it reflects what's actually materialized right now.
     prov = _write_provenance(eid, note_dir, mat, ref) if (targets and execute) else None
-    return {"synced": synced, "missing": missing, "failed": failed,
+    return {"synced": synced, "current": current, "missing": missing, "failed": failed,
             "unplaced": unplaced, "provenance": prov}
 
 
-def cmd_sync(figs, eid, attach, note_dir, notes, dpi, execute) -> int:
-    r = materialize(figs, eid, note_dir, attach, notes, dpi, execute)
+def cmd_sync(figs, eid, attach, note_dir, notes, dpi, execute, force=False) -> int:
+    r = materialize(figs, eid, note_dir, attach, notes, dpi, execute, force=force)
     print(f"{len(r['synced'])} figure(s) {'synced' if execute else 'to sync'} "
           f"(embed=TRUE and referenced in a note)"
           f"{'' if execute else '  [DRY RUN — pass -y to write]'}")
@@ -428,13 +459,19 @@ def cmd_sync(figs, eid, attach, note_dir, notes, dpi, execute) -> int:
         e = figs[t]
         verb = "wrote" if execute else "would write"
         print(f"  {verb} {eid}_{t}.png  <- {os.path.basename(e['_path'])}  ({e.get('saved_at', '')})")
+    if r["current"]:
+        print(f"  {len(r['current'])} already current (attachment newer than its render; "
+              f"--force to redo, e.g. after a --dpi change)")
     for t in r["missing"]:
         print(f"  SKIP {t}: no on-disk render (re-run the chunk)")
     for t, err in r.get("failed", []):
         print(f"  FAIL {t}: {err}")
     if r["unplaced"]:
+        shown = r["unplaced"][:UNPLACED_SHOWN]
+        more = len(r["unplaced"]) - len(shown)
         print(f"  note: {len(r['unplaced'])} embed=TRUE figure(s) not in any note (skipped): "
-              f"{', '.join(r['unplaced'])}")
+              f"{', '.join(shown)}"
+              + (f", … and {more} more (`figsync drift --all` lists them)" if more else ""))
     if r["provenance"]:
         print(f"  provenance -> {os.path.basename(r['provenance'])}")
     return 0
@@ -665,6 +702,12 @@ def main(argv=None) -> int:
     ap.add_argument("--dpi", type=int, default=300, help="raster DPI (default 300)")
     ap.add_argument("--keep", type=int, default=1,
                     help="prune: newest renders to keep per title (default 1)")
+    ap.add_argument("--force", action="store_true",
+                    help="sync: re-rasterise every placed figure, even where the attachment is "
+                         "already newer than its render (needed after a --dpi change)")
+    ap.add_argument("--all", action="store_true", dest="show_all",
+                    help="drift: list every unplaced title instead of the first "
+                         f"{UNPLACED_SHOWN}")
     ap.add_argument("-y", "--yes", action="store_true", help="execute (sync/place/prune default to a dry run)")
     args = ap.parse_args(argv)
 
@@ -677,7 +720,7 @@ def main(argv=None) -> int:
         cmd_index(figs)
         return 0
     if args.action == "drift":
-        cmd_drift(figs, eid, notes, _qmd_embed_titles(qmd), attach)
+        cmd_drift(figs, eid, notes, _qmd_embed_titles(qmd), attach, show_all=args.show_all)
         return 0
     if args.action == "place":
         return cmd_place(args, eid, qmd, figs, notes)
@@ -685,7 +728,7 @@ def main(argv=None) -> int:
         return cmd_register(args, eid, data_dir, figs, walk_up)
     if args.action == "prune":
         return cmd_prune(data_dir, args.keep, args.yes, walk_up)
-    return cmd_sync(figs, eid, attach, note_dir, notes, args.dpi, args.yes)
+    return cmd_sync(figs, eid, attach, note_dir, notes, args.dpi, args.yes, force=args.force)
 
 
 if __name__ == "__main__":

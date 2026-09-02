@@ -153,7 +153,7 @@ def new(project: str, title: str, platform: str | None = None,
     platform = platform or p.get("default_platform", "other")
 
     vault_root = p["_vault_root"]
-    vault_exp_dir = os.path.join(vault_root, p["vault_dir"])
+    vault_exp_dir = config.note_dirs(p, vault_root)[0]   # primary = first entry
     os.makedirs(vault_exp_dir, exist_ok=True)
     # A hand-supplied id wins. Some projects number their runs by hand (EXP01..EXP04)
     # and were renaming the generated PROJECT-YYYY-MM-DD-A tree in both roots after every

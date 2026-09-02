@@ -32,13 +32,13 @@ def _all_experiment_notes(cfg) -> list[dict]:
     notes = []
     for name in cfg.get("projects", {}):
         p = lkconfig.project(name, cfg)
-        exp_dir = os.path.join(p["_vault_root"], p["vault_dir"])
-        for note in glob.glob(os.path.join(exp_dir, "*", "*.md")):
-            fm = lkconfig.read_frontmatter(note)
-            if fm.get("experiment_id"):
-                fm["_note"] = note
-                fm["_project"] = name
-                notes.append(fm)
+        for exp_dir in lkconfig.note_dirs(p):
+            for note in glob.glob(os.path.join(exp_dir, "*", "*.md")):
+                fm = lkconfig.read_frontmatter(note)
+                if fm.get("experiment_id"):
+                    fm["_note"] = note
+                    fm["_project"] = name
+                    notes.append(fm)
     return notes
 
 
@@ -318,6 +318,8 @@ def main(argv=None) -> int:
                 _do(execute, f"figsync: {len(res['synced'])} note figure(s) → "
                              f"{', '.join(res['synced'])}")
                 figures_done.extend(res["synced"])
+            elif res.get("current"):
+                _do(execute, f"figsync: {len(res['current'])} note figure(s) already current")
             else:
                 _do(execute, "figsync: no embed=TRUE figures referenced in a note (nothing to refresh)")
             if res["missing"]:

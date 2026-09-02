@@ -6,6 +6,59 @@ All notable changes to figtracer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-02
+
+### Added
+
+- `figrun` reads an optional `figrun:` block from `~/.config/labkit/config.yaml`: `runner` (how R
+  is launched), `expensive_calls` and `reload_calls`. The defaults are unchanged and are one lab's
+  idioms; a notebook written against other packages can now be run without editing figtracer. The
+  runner defaults to `rlog` when it is on PATH and plain `Rscript` otherwise, and a missing runner
+  is a one-line error instead of an uncaught `FileNotFoundError` — `rlog` was hard-coded and is
+  not part of figtracer. A plan-only run (`--dry-run`) now goes through the same launcher. The
+  README states the R packages the engine needs.
+- A project may keep experiment notes in more than one vault folder: `vault_dir` in
+  `projects.yaml` accepts a list as well as a string. Every entry is searched by `figsync`,
+  `sync` and Mission Control; the first is where `figtracer new` scaffolds. A note filed
+  anywhere but the single `vault_dir` used to be invisible to all three.
+
+### Changed
+
+- `figsync sync` leaves a placed figure alone when its attachment PNG is already newer than the
+  render it resolves to, and reports it as current. Every sync used to re-rasterise every placed
+  figure — 33 pdftoppm runs at 300 dpi on one experiment — and rewrite every PNG, so the Drive
+  client re-uploaded all of them each time. `--force` redoes everything, which is needed after a
+  `--dpi` change, the one thing file times cannot see. `figtracer sync` inherits the check.
+- `figsync drift` lists the first 15 unplaced titles and the count of the rest. A notebook that
+  loops `f2()` over conditions leaves hundreds of `embed=TRUE` titles nobody will place (129 on one
+  experiment), and they buried the few lines that need acting on. `--all` lists every one.
+
+### Fixed
+
+- `figrun` no longer reports a figure whose title is built at runtime — `paste0("heatmap_",
+  K_MAIN)` — as "never rendered". The source yields only a prefix, which no MANIFEST contains, so
+  `--list` called almost every figure in one notebook unrendered, `--changed` re-ran all of them
+  every time, and `--awaiting` skipped them as unknowable. Such chunks are now resolved by the
+  `chunk_label` figrun stamps into every entry it writes, or failing that by the newest MANIFEST
+  title starting with the prefix.
+- `figrun verify` attributes a new MANIFEST entry to the run by its target `chunk_label`, not by
+  "newer than when we started" — a figure saved from an interactive session in the same minute
+  was previously claimed and checked as figrun's own.
+- `figrun` now sees `saveFig()` titles. The scan kept only the text `saveFig(`, so those figures
+  counted as figure chunks but were invisible to `--awaiting`, `--changed` and `verify`.
+- The R engine restores whatever `f2` / `saveFig` binding it shadowed instead of deleting it.
+  seekit's loader can `sys.source()` helpers straight into `globalenv`, and the old `rm()` then
+  removed the real `f2` before the first target chunk ran.
+- The R engine calls `here::i_am()` itself, from the plan, rather than relying on the notebook's
+  anchor chunk happening to be pulled in by dataflow.
+- Asking `figrun` for a figure chunk marked `eval: false` now says it is a switched-off figure,
+  not a chunk that mutates the object.
+- The plan file is written once per experiment under `~/.local/state/figtracer/` and overwritten,
+  instead of a new ~250 KB file in `/tmp` on every run.
+- `tests/test_figrun.py` pins the two regressions the 0.2.0 notes describe in prose: a doc comment
+  naming an expensive call must not reclassify a chunk, and `--allow-expensive` must un-skip only
+  the chunks named as targets.
+
 ## [0.2.0] — 2026-08-31
 
 ### Added
@@ -102,5 +155,7 @@ one installable package with three console scripts (`figtracer`, `labkit`, `figt
 - Cross-language front-ends (R and Python) writing the same manifest contract.
 - MIT license; packaging metadata; CI (pytest on Python 3.11 / 3.12 / 3.13).
 
-[Unreleased]: https://github.com/david-priest/figtracer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/david-priest/figtracer/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/david-priest/figtracer/releases/tag/v0.3.0
+[0.2.0]: https://github.com/david-priest/figtracer/releases/tag/v0.2.0
 [0.1.0]: https://github.com/david-priest/figtracer/releases/tag/v0.1.0

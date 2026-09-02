@@ -8,7 +8,15 @@
 projects:
   EXAMPLE:
     title: "Example project"
-    vault_dir: "Example Project/Experiments"          # experiment-note folders, relative to vault_root
+    # Experiment-note folders, relative to vault_root. A STRING or a LIST — notes do
+    # not have to live under one "Experiments" folder. With a list, every entry is
+    # searched by figsync / sync / Mission Control and the FIRST is where `labkit new`
+    # scaffolds. Use a list when a project keeps, say, per-run notes in Experiments/
+    # and cross-dataset comparison notes alongside their siblings elsewhere.
+    #   vault_dir:
+    #     - "Example Project/Experiments"
+    #     - "Example Project/Dataset comparisons"
+    vault_dir: "Example Project/Experiments"
     data_root: "~/data/Example Project"               # where raw data + analysis folders live (absolute or ~)
     default_platform: CyTOF                            # CyTOF | flow | 10x_5p | 10x_3p | other
     template: wetlab_experiment                        # a templates/<name>.md shipped with labkit
