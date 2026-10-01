@@ -26,7 +26,7 @@ again. The figure in the note changes and the existing block is replaced rather 
 The demo needs no configuration, vault, project registry, R, external dataset, Chrome or
 Matplotlib.
 
-![Before rerunning, a Markdown lab note contains a blue chart connected to its analysis and manifest; after editing the data and rerunning, that same block contains the updated orange chart rather than a duplicate](docs/figtracer-before-after.svg)
+![Before: a Markdown lab note holds a blue bar chart from the first run of figtracer demo. After three values in analysis.py are edited and the demo is run again, the same note block holds the updated orange chart, replaced in place rather than duplicated](docs/figtracer-before-after.svg)
 
 The [five-minute guide](docs/GETTING_STARTED.md) walks through the same loop, and
 [`examples/minimal`](examples/minimal) holds a frozen copy of its output.
