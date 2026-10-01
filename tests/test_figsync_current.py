@@ -86,3 +86,32 @@ def test_drift_truncates_a_wall_of_unplaced_titles(tmp_path, capsys):
     assert "and 5 more (pass --all to list them)" in out
     figsync.cmd_drift(figs, "EXP", notes, set(), attach, show_all=True)
     assert capsys.readouterr().out.count("UNPLACED  loop_") == n
+
+
+def test_drift_reports_an_attachment_older_than_the_newest_render_as_stale(tmp_path, capsys):
+    """The gap the figsync design note recorded: drift said ok while the note showed a clustering one run
+    out of date. The attachment exists, so it is not NOT MATERIALISED; it is older than
+    the render sync would now write, so it is STALE."""
+    figs, note_dir, attach, notes = _setup(tmp_path)
+    _sync(figs, note_dir, attach, notes)
+    figsync.cmd_drift(figs, "EXP", notes, set(), attach)
+    out = capsys.readouterr().out
+    assert out.count("[ok]") == 2 and "0 STALE" in out
+    future = time.time() + 60
+    os.utime(figs["fig_b"]["_path"], (future, future))
+    figsync.cmd_drift(figs, "EXP", notes, set(), attach)
+    out = capsys.readouterr().out
+    assert "[STALE" in out and "fig_b" in out.split("[STALE")[1].split("\n")[0]
+    assert "1 STALE (run sync)" in out and out.count("[ok]") == 1
+
+
+def test_place_with_an_ambiguous_note_says_what_to_pass(tmp_path, capsys):
+    figs, note_dir, attach, notes = _setup(tmp_path)
+    (tmp_path / "vault" / "EXP" / "EXP panel.md").write_text("\n")
+    notes = notes + [str(tmp_path / "vault" / "EXP" / "EXP panel.md")]
+    import types
+    args = types.SimpleNamespace(title="fig_a", note="EXP", width=720, link_style="obsidian",
+                                 caption=None, yes=False)
+    rc = figsync.cmd_place(args, "EXP", None, figs, notes)
+    err = capsys.readouterr().err
+    assert rc == 2 and "matched 2" in err and "Pass the full basename" in err

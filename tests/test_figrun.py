@@ -8,6 +8,7 @@ a doc comment naming an expensive call must not reclassify a chunk, and
 """
 from __future__ import annotations
 
+import csv
 import json
 import os
 from types import SimpleNamespace
@@ -357,6 +358,497 @@ def test_verify_rejects_a_blank_device_and_a_missing_file(tmp_path, capsys):
     assert "blank device" in err and "missing file" in err
 
 
+# ── verification: tables ──────────────────────────────────────────────────────
+# A saveTable() entry is a CSV at the root of outputs/, and a correct one is small.
+# The blank-device size floor is a figure rule; a table is judged by reading it.
+
+TABLE_QMD = '''```{r}
+#| label: cell-counts
+p <- ggplot(df, aes(x)) + geom_bar()
+f2(p, h = 4, w = 6, "demo_cell_counts", embed = TRUE)
+```
+
+```{r}
+#| label: donor-medians
+saveTable(medians, "demo_donor_medians", digits = 2)
+```
+'''
+
+SMALL_TABLE = "donor,arm,value\nD1,treated,0.42\nD2,control,0.13\n"
+MANY_ROWS = "".join(f"D{i},treated,0.{i:03d}\n" for i in range(1, 301))
+
+
+SMALL_COLUMNS = ["donor", "arm", "value"]
+
+
+def _table_entry(root, title, saved_at, content, chunk_label=None, qmd_path=None,
+                 n_rows=2, columns=SMALL_COLUMNS, n_cols=None):
+    """A MANIFEST line plus the CSV it points at, the way saveTable() leaves them:
+    `kind: table`, the file at the root of outputs/, and the shape the writer recorded
+    (n_rows, n_cols, columns). The record is what the writer meant to write, so a test
+    of a damaged file keeps SMALL_TABLE's record by default."""
+    path = os.path.join(root, "outputs", f"{title}.csv")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(content.encode("utf-8") if isinstance(content, str) else content)
+    if n_cols is None:
+        n_cols = len(columns) if isinstance(columns, list) else (1 if columns else 0)
+    return {"kind": "table", "title": title, "rel_path": f"{title}.csv", "fig": f"{title}.csv",
+            "fig_format": "csv", "n_rows": n_rows, "n_cols": n_cols, "columns": columns,
+            "saved_at": saved_at, "chunk_label": chunk_label,
+            "qmd_path": qmd_path or os.path.join(root, "analysis", "EXP.qmd")}
+
+
+def _verify_one_table(tmp_path, content, **kw):
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    _write_manifest(root, [_table_entry(root, "demo_donor_medians", "2026-09-02T10:00:05",
+                                        content, chunk_label="donor-medians", **kw)])
+    size = os.path.getsize(os.path.join(root, "outputs", "demo_donor_medians.csv"))
+    return figrun.verify(root, chunks, ["donor-medians"], "2026-09-02T10:00:00"), size
+
+
+@pytest.mark.parametrize("content, n_rows", [(SMALL_TABLE, 2), ("donor,arm,value\n", 0)],
+                         ids=["two-rows", "header-only"])
+def test_verify_accepts_a_small_table(tmp_path, capsys, content, n_rows):
+    rc, size = _verify_one_table(tmp_path, content, n_rows=n_rows)
+    assert size < 4000
+    cap = capsys.readouterr()
+    assert rc == 0, cap.err
+    assert "verified 1 table(s)" in cap.out and "ok  demo_donor_medians  (table, " in cap.out
+
+
+@pytest.mark.parametrize("content, why", [
+    ("", "table file is empty"),
+    ("\n\n", "table has no header row"),
+], ids=["empty", "blank-lines"])
+def test_verify_rejects_an_empty_table(tmp_path, capsys, content, why):
+    rc, _ = _verify_one_table(tmp_path, content)
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert f"demo_donor_medians: {why}" in err and "blank device" not in err
+
+
+@pytest.mark.parametrize("content", [
+    "donor,arm,value\n" + MANY_ROWS + '"D301,control,0.5\n',      # a quote that never closes
+    b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 20,                 # not text at all
+], ids=["unterminated-quote", "not-text"])
+def test_verify_rejects_a_table_that_does_not_parse(tmp_path, capsys, content):
+    """Over the figure floor on purpose: a size says nothing about whether a table reads."""
+    rc, size = _verify_one_table(tmp_path, content)
+    assert size >= 4000
+    assert rc == 1
+    assert "demo_donor_medians: table does not parse as CSV" in capsys.readouterr().err
+
+
+BLANK_SVG = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+             '<svg class="svglite" width="432.00pt" height="288.00pt" viewBox="0 0 432.00 288.00"'
+             ' xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">\n'
+             '<defs>\n  <style type="text/css"><![CDATA[\n'
+             '    .svglite line, .svglite polyline, .svglite polygon, .svglite path, .svglite rect,'
+             ' .svglite circle { fill: none; stroke: #000000; stroke-linecap: round; }\n'
+             '  ]]></style>\n</defs>\n'
+             '<rect width="100%" height="100%" style="stroke: none; fill: #FFFFFF;"/>\n</svg>\n')
+
+
+@pytest.mark.parametrize("ext, content", [
+    ("svg", BLANK_SVG),                                   # text, so it reads as "CSV"
+    ("pdf", b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n" + b"x" * 40),
+    ("png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 40),
+], ids=["svg", "pdf", "png"])
+def test_verify_rejects_a_figure_render_labelled_table(tmp_path, capsys, ext, content):
+    """`kind: table` alone does not make a file a table. A blank render whose entry says
+    table must not leave the size floor by reading as text: a table is outputs/<title>.csv."""
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    rel = os.path.join("2026-09-02_EXP", f"2026-09-02_10.00.05_demo_cell_counts.{ext}")
+    path = os.path.join(root, "outputs", rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(content.encode("utf-8") if isinstance(content, str) else content)
+    assert os.path.getsize(path) < 4000
+    _write_manifest(root, [{"kind": "table", "title": "demo_cell_counts", "rel_path": rel,
+                            "fig_format": ext, "saved_at": "2026-09-02T10:00:05",
+                            "chunk_label": "cell-counts",
+                            "qmd_path": os.path.join(root, "analysis", "EXP.qmd")}])
+    rc = figrun.verify(root, chunks, ["cell-counts"], "2026-09-02T10:00:00")
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert f"demo_cell_counts: kind is table but the file is not a CSV — {rel}" in cap.err
+    assert "ok  demo_cell_counts" not in cap.out
+
+
+def test_verify_applies_the_provenance_checks_to_a_table(tmp_path, capsys):
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    elsewhere = _table_entry(root, "demo_donor_medians", "2026-09-02T10:00:05", SMALL_TABLE,
+                             chunk_label="donor-medians",
+                             qmd_path="/elsewhere/OTHER/analysis/OTHER.qmd")
+    unowned = dict(_table_entry(root, "demo_arm_counts", "2026-09-02T10:00:05", SMALL_TABLE,
+                                chunk_label="donor-medians"), qmd_path=None)
+    _write_manifest(root, [elsewhere, unowned])
+    assert figrun.verify(root, chunks, ["donor-medians"], "2026-09-02T10:00:00") == 1
+    err = capsys.readouterr().err
+    assert "demo_donor_medians: qmd_path is outside this experiment" in err
+    assert "demo_arm_counts: MANIFEST entry has no qmd_path" in err
+
+
+def test_a_blank_figure_still_fails_beside_a_valid_table(tmp_path, capsys):
+    """Only tables leave the size floor; a tiny figure render is still a blank device."""
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    _write_manifest(root, [
+        _entry(root, "demo_cell_counts", "2026-09-02T10:00:05", chunk_label="cell-counts",
+               size=10),
+        _table_entry(root, "demo_donor_medians", "2026-09-02T10:00:06", SMALL_TABLE,
+                     chunk_label="donor-medians")])
+    rc = figrun.verify(root, chunks, ["cell-counts", "donor-medians"], "2026-09-02T10:00:00")
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "demo_cell_counts: render is only 14 B — probably a blank device" in cap.err
+    assert "demo_donor_medians" not in cap.err
+    assert "ok  demo_donor_medians  (table, 2 rows" in cap.out
+
+
+def test_verify_counts_figures_and_tables_separately(tmp_path, capsys):
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    _write_manifest(root, [
+        _entry(root, "demo_cell_counts", "2026-09-02T10:00:05", chunk_label="cell-counts"),
+        _table_entry(root, "demo_donor_medians", "2026-09-02T10:00:06", SMALL_TABLE,
+                     chunk_label="donor-medians")])
+    assert figrun.verify(root, chunks, ["cell-counts", "donor-medians"],
+                         "2026-09-02T10:00:00") == 0
+    assert "verified 1 figure(s) and 1 table(s)" in capsys.readouterr().out
+
+
+# ── tables are held to the record their writer made ──────────────────────────
+# saveTable() (seekit and the bundled shim) and figtracer.savetable() record n_rows,
+# n_cols and columns in the entry, and put the file at outputs/<title>.csv. Reading to
+# the end as CSV is not enough: almost any text does. The file must be that table.
+
+@pytest.mark.parametrize("content, why", [
+    ("D1,treated,0.42\nD2,control,0.13\n",
+     "header row does not match the columns the MANIFEST records — file "
+     "['D1', 'treated', '0.42'], MANIFEST ['donor', 'arm', 'value']"),
+    ("These are the donor medians for the treated arm.\n",
+     "header row does not match the columns the MANIFEST records"),
+    ("donor,arm,value\nD1,treated,0.42\nD2,control,0.13,0.99,extra\n",
+     "table is not rectangular — data row 2 has 5 field(s), the header has 3"),
+    ("donor,arm,value\nD1,treated,0.42\nD2,cont",
+     "table is not rectangular — data row 2 has 2 field(s), the header has 3"),
+    ("donor,arm,value\nD1,treated,0.42\nD2,control,0.1",
+     "table does not end with a complete record — no newline after the last one"),
+    ("donor,arm,value\nD1,treated,0.42\n",
+     "table has 1 data row(s) but the MANIFEST records n_rows 2"),
+    ("donor,arm,value\nD1,treated,0.42\nD2,con\x00trol,0.13\n",
+     "table does not parse as CSV — it contains a NUL byte (at byte 38)"),
+], ids=["headerless", "prose", "ragged", "truncated-last-row", "truncated-at-a-comma",
+        "row-lost", "nul-byte"])
+def test_verify_rejects_a_table_that_is_not_the_recorded_table(tmp_path, capsys, content, why):
+    """Every one of these parses as CSV, and each passed while parsing was the test."""
+    rc, _ = _verify_one_table(tmp_path, content)
+    cap = capsys.readouterr()
+    assert rc == 1, cap.out
+    assert f"demo_donor_medians: {why}" in cap.err
+    assert "ok  demo_donor_medians" not in cap.out
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"n_rows": None}, "MANIFEST entry does not record the table's shape — n_rows, n_cols "
+                       "and columns are required for a table (docs/MANIFEST.md)"),
+    ({"columns": None}, "MANIFEST entry does not record the table's shape"),
+    ({"n_cols": "3"}, "MANIFEST entry does not record the table's shape"),
+    ({"n_cols": 2}, "the MANIFEST entry contradicts itself — n_cols is 2 but columns lists 3"),
+], ids=["no-n_rows", "no-columns", "n_cols-not-a-count", "n_cols-disagrees"])
+def test_verify_requires_the_record_the_contract_requires(tmp_path, capsys, change, why):
+    """docs/MANIFEST.md requires n_rows, n_cols and columns for a table, and every
+    table writer records them; without them nothing says what the file should hold."""
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    e = _table_entry(root, "demo_donor_medians", "2026-09-02T10:00:05", SMALL_TABLE,
+                     chunk_label="donor-medians")
+    for k, v in change.items():
+        if v is None:
+            e.pop(k)
+        else:
+            e[k] = v
+    _write_manifest(root, [e])
+    assert figrun.verify(root, chunks, ["donor-medians"], "2026-09-02T10:00:00") == 1
+    assert f"demo_donor_medians: {why}" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("content, n_rows, columns", [
+    ('""\n', 0, []),            # write.csv of data.frame(); seekit records columns []
+    ('""\n\n\n\n', 3, []),      # write.csv of data.frame(row.names = 1:3)
+    ('""\n', 0, ""),            # the shim spells an empty `columns` as ""
+], ids=["no-rows", "three-rows", "shim-spelling"])
+def test_verify_rejects_a_table_with_no_columns(tmp_path, capsys, content, n_rows, columns):
+    rc, _ = _verify_one_table(tmp_path, content, n_rows=n_rows, columns=columns)
+    assert rc == 1
+    assert ("demo_donor_medians: table has no columns (the MANIFEST records n_cols 0)"
+            in capsys.readouterr().err)
+
+
+@pytest.mark.parametrize("rel, content", [
+    ("demo_donor_medians.CSV", BLANK_SVG),
+    (os.path.join("2026-09-02_EXP", "demo_donor_medians.csv"), SMALL_TABLE),
+    (os.path.join("..", "OTHER", "outputs", "demo_donor_medians.csv"), SMALL_TABLE),
+    ("demo_arm_counts.csv", SMALL_TABLE),
+], ids=["upper-case-extension", "dated-subfolder", "outside-outputs", "another-title"])
+def test_verify_holds_a_table_to_the_contract_path(tmp_path, capsys, rel, content):
+    """A table is `<title>.csv` at the root of outputs/, exactly (docs/MANIFEST.md).
+    The first case is a blank svglite render named .CSV, which read as a one-column
+    table while the extension was compared without case."""
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    e = _table_entry(root, "demo_donor_medians", "2026-09-02T10:00:05", SMALL_TABLE,
+                     chunk_label="donor-medians")
+    path = os.path.normpath(os.path.join(root, "outputs", rel))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    e["rel_path"] = e["fig"] = rel
+    _write_manifest(root, [e])
+    rc = figrun.verify(root, chunks, ["donor-medians"], "2026-09-02T10:00:00")
+    cap = capsys.readouterr()
+    assert rc == 1, cap.out
+    assert (f"demo_donor_medians: kind is table but the entry points at {rel}; a table is "
+            f"demo_donor_medians.csv at the root of outputs/ (docs/MANIFEST.md)") in cap.err
+
+
+def test_verify_rejects_a_table_whose_fig_format_is_not_csv(tmp_path, capsys):
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    e = _table_entry(root, "demo_donor_medians", "2026-09-02T10:00:05", SMALL_TABLE,
+                     chunk_label="donor-medians")
+    e["fig_format"] = "svg"
+    _write_manifest(root, [e])
+    assert figrun.verify(root, chunks, ["donor-medians"], "2026-09-02T10:00:00") == 1
+    assert ("demo_donor_medians: kind is table but fig_format is 'svg', not 'csv'"
+            in capsys.readouterr().err)
+
+
+# The bytes below are what utils::write.csv wrote from seekit's saveTable() and the
+# shim's saveTable() on R 4.4.1, and the columns what each recorded (checked through
+# rlog, 2026-09-28), plus the two spellings no writer here produces but R can.
+@pytest.mark.parametrize("content, n_rows, columns, n_cols", [
+    ('"donor","note"\n"D1","' + "x" * 200_000 + '"\n', 1, ["donor", "note"], None),
+    (b'"unit","value"\n"\xb5g",0.42\n', 1, ["unit", "value"], None),
+    ('"",""\n1,3\n2,4\n', 2, ["", ""], None),
+    ('""\n1\n2\n', 2, [""], None),
+    ('""\n1\n2\n', 2, "", 1),
+    ('"donor"\n"D1"\nNA\n', 2, "donor", None),
+    ('"NA","b"\n1,3\n2,4\n', 2, [None, "b"], None),
+    ('"a ""q"""\n"x\ny"\n"z,w"\n', 2, ['a "q"'], None),
+    ('"donor","arm","value"\n"D1","treated",0.42\n"D2","control",NA\n', 2, SMALL_COLUMNS, None),
+    ("﻿donor,arm,value\nD1,treated,0.42\nD2,control,0.13\n", 2, SMALL_COLUMNS, None),
+    ("donor,arm,value\r\nD1,treated,0.42\r\nD2,control,0.13\r\n", 2, SMALL_COLUMNS, None),
+], ids=["field-over-131072-chars", "latin-1", "empty-names", "one-empty-name",
+        "one-empty-name-shim", "one-column-shim", "na-name-seekit", "quotes-and-newline",
+        "write-csv-na", "byte-order-mark", "crlf"])
+def test_verify_accepts_what_the_table_writers_write(tmp_path, capsys, content, n_rows,
+                                                    columns, n_cols):
+    """The first four failed while the check was "parses as UTF-8 CSV with a non-blank
+    header": the csv module's 131,072-character field limit, a Latin-1 file (write.csv
+    writes the session's native encoding), and a header of empty names, which is what
+    write.csv writes for a data frame whose names are "". The record decides."""
+    limit = csv.field_size_limit()
+    rc, _ = _verify_one_table(tmp_path, content, n_rows=n_rows, columns=columns, n_cols=n_cols)
+    cap = capsys.readouterr()
+    assert rc == 0, cap.err
+    assert f"ok  demo_donor_medians  (table, {n_rows} row" in cap.out
+    assert csv.field_size_limit() == limit
+
+
+def test_verify_accepts_a_table_written_by_figtracer_savetable(tmp_path, capsys):
+    """The Python writer's own file and MANIFEST line, not a hand-made pair."""
+    from figtracer import savetable
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    savetable.savetable([["donor", "arm", "value"], ["D1", "treated", 0.42], ["D2", "", ""]],
+                        "demo_donor_medians", outputs=os.path.join(root, "outputs"),
+                        notebook=qmd)
+    mp = os.path.join(root, "outputs", "MANIFEST.jsonl")
+    with open(mp, encoding="utf-8") as fh:
+        e = json.loads(fh.read())
+    e["chunk_label"] = "donor-medians"       # a figrun run sets it through knitr
+    with open(mp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(e) + "\n")
+    rc = figrun.verify(root, chunks, ["donor-medians"], "2026-09-02T10:00:00")
+    cap = capsys.readouterr()
+    assert rc == 0, cap.err
+    assert "ok  demo_donor_medians  (table, 2 rows" in cap.out
+
+
+# ── a column that is itself a matrix or a data frame ─────────────────────────
+# write.csv writes a column holding a matrix or data frame of more than one column
+# (aggregate() with a FUN that returns a vector; df$stats <- data.frame(a, b)) as one
+# field per sub-column, named <name>.<sub-name>, while saveTable() records names(df)
+# and ncol(df). The bytes and records below are what seekit's and the shim's saveTable()
+# wrote on R 4.4.1 for synthetic frames (the two wrote identical bytes; checked through
+# rlog, 2026-09-28). A 300-row aggregate() table is over the 4,000 B figure floor, so it
+# passed on main and failed while the header had to equal `columns`.
+
+AGG_TABLE = '"arm","value.mean","value.n"\n"control",5.166667,3.000000\n"treated",2.250000,3.000000\n'
+AGG_300 = '"arm","value.mean","value.n"\n' + "".join(
+    f'"D{i}",{i}.500000,3.000000\n' for i in range(1, 301))
+ARM_ROWS = ['"treated","D1",1.50', '"treated","D2",2.25', '"treated","D3",3.00',
+            '"control","D1",4.00', '"control","D2",5.50', '"control","D3",6.00']
+ARM_COLUMNS = ["arm", "donor", "value"]
+
+
+def _arm_table(header, tails):
+    """write.csv's bytes for the six-row arm/donor/value frame plus the given columns."""
+    return header + "\n" + "".join(f"{row},{tail}\n" for row, tail in zip(ARM_ROWS, tails))
+
+
+@pytest.mark.parametrize("content, n_rows, columns", [
+    (AGG_TABLE, 2, ["arm", "value"]),
+    (AGG_300, 300, ["arm", "value"]),
+    (_arm_table('"arm","donor","value","stats.a","stats.b"',
+                ["1,a", "2,b", "3,c", "4,d", "5,e", "6,f"]), 6, ARM_COLUMNS + ["stats"]),
+    (_arm_table('"arm","donor","value","m.1","m.2"',
+                [" 1, 7", " 2, 8", " 3, 9", " 4,10", " 5,11", " 6,12"]), 6, ARM_COLUMNS + ["m"]),
+    (_arm_table('"arm","donor","value","s.p","s.q.x","s.q.y"', ["1,4,7", "2,5,8", "3,6,9"]),
+     3, ARM_COLUMNS + ["s"]),
+    (_arm_table('"arm","donor","value","one","two.u","two.v"',
+                [f"{i},{i},{i}" for i in range(1, 7)]), 6, ARM_COLUMNS + ["one", "two"]),
+    (_arm_table('"arm","donor","value",".a",".b"', [f"{i},{i + 1}" for i in range(1, 7)]),
+     6, ARM_COLUMNS + [""]),
+    (_arm_table('"arm","donor","value","NA.a","NA.b"', [f"{i},{i + 1}" for i in range(1, 7)]),
+     6, ARM_COLUMNS + [None]),
+    (_arm_table('"arm","donor","value","NA.a","NA.b"', [f"{i},{i + 1}" for i in range(1, 7)]),
+     6, ARM_COLUMNS + ["NA"]),
+    (_arm_table('"arm","donor","value","m.","m.b"', [f"{i},{i + 1}" for i in range(1, 7)]),
+     6, ARM_COLUMNS + ["m"]),
+    (_arm_table('"m.a","donor","value","m.a","m.b"', [f"{i},{i + 1}" for i in range(1, 7)]),
+     6, ["m.a", "donor", "value", "m"]),
+], ids=["aggregate-vector-fun", "aggregate-300-rows", "data-frame-column", "unnamed-matrix",
+        "nested-data-frame", "one-and-two-column-matrices", "empty-name", "na-name-seekit",
+        "na-name-shim", "empty-sub-name", "a-name-that-looks-expanded"])
+def test_verify_accepts_write_csv_expanding_a_matrix_column(tmp_path, capsys, content, n_rows,
+                                                            columns):
+    """Each recorded name is written as itself, or as two or more cells starting
+    `<name>.`; a one-column matrix (scale(), `one` above) keeps its name."""
+    rc, _ = _verify_one_table(tmp_path, content, n_rows=n_rows, columns=columns)
+    cap = capsys.readouterr()
+    assert rc == 0, cap.err
+    assert f"ok  demo_donor_medians  (table, {n_rows} rows" in cap.out
+
+
+@pytest.mark.parametrize("content", [
+    '"arm","value.mean"\n"control",5.166667\n"treated",2.250000\n',
+    '"arm","val.mean","val.n"\n"control",5.166667,3.000000\n"treated",2.250000,3.000000\n',
+    '"value.mean","value.n","arm"\n5.166667,3.000000,"control"\n2.250000,3.000000,"treated"\n',
+    '"arm","value","value.n"\n"control",5.166667,3.000000\n"treated",2.250000,3.000000\n',
+    '"control",5.166667,3.000000\n"treated",2.250000,3.000000\n',
+], ids=["one-sub-column", "another-prefix", "out-of-order", "a-cell-left-over", "headerless"])
+def test_verify_rejects_a_header_write_csv_would_not_write(tmp_path, capsys, content):
+    """write.csv expands a column only when it has more than one sub-column, in place,
+    under its own name; anything else is not the recorded table."""
+    rc, _ = _verify_one_table(tmp_path, content, n_rows=2, columns=["arm", "value"])
+    cap = capsys.readouterr()
+    assert rc == 1, cap.out
+    assert ("demo_donor_medians: header row does not match the columns the MANIFEST records"
+            in cap.err)
+
+
+@pytest.mark.parametrize("header, columns, expected", [
+    (["arm", "m.a", "m.b", "m.a", "m.b"], ["arm", "m", "m"], True),   # a repeated name
+    (["arm", "m.a", "m.b", "m"], ["arm", "m", "m"], True),            # 2-column, then 1-column
+    (["arm", "m.a", "m.b", "m.c"], ["arm", "m", "m"], False),         # 3 cells cannot be 2 + 1
+    (["x.a", "x.b"] * 500, ["x"] * 500, True),                        # stays linear per column
+    (["x.a", "x.b"] * 499 + ["x.a", "y"], ["x"] * 500, False),
+], ids=["repeated-name", "two-then-one", "no-split", "many-repeats", "many-repeats-wrong"])
+def test_header_is_resolves_repeated_names(header, columns, expected):
+    assert figrun._header_is(header, columns) is expected
+
+
+def test_verify_rejects_a_character_matrix_column_write_csv_left_unquoted(tmp_path, capsys):
+    """Once a frame has a matrix column, write.csv leaves that column's character cells
+    unquoted, so a comma in one splits the row. The file does not read back as the
+    table, so it fails, now on the row rather than on the expanded header."""
+    content = _arm_table('"arm","donor","value","m.1","m.2"',
+                         ["p,q,a", 'r"s,b', "t,c", "u,d", "v,e", "w,f"])
+    rc, _ = _verify_one_table(tmp_path, content, n_rows=6, columns=ARM_COLUMNS + ["m"])
+    assert rc == 1
+    assert ("demo_donor_medians: table is not rectangular — data row 1 has 6 field(s), "
+            "the header has 5") in capsys.readouterr().err
+
+
+# ── one title, several entries in one run ────────────────────────────────────
+
+@pytest.mark.parametrize("figure_first", [True, False], ids=["figure-then-table",
+                                                            "table-then-figure"])
+def test_a_table_does_not_mask_a_blank_figure_of_the_same_title(tmp_path, capsys,
+                                                                 figure_first):
+    """Keyed by title, the later entry hid the earlier one: a blank render followed by
+    a table of the same title passed on the table alone."""
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    fig = _entry(root, "demo_medians", "2026-09-02T10:00:05", chunk_label="cell-counts",
+                 size=10)
+    tab = _table_entry(root, "demo_medians", "2026-09-02T10:00:06", SMALL_TABLE,
+                       chunk_label="donor-medians")
+    _write_manifest(root, [fig, tab] if figure_first else [tab, fig])
+    rc = figrun.verify(root, chunks, ["cell-counts", "donor-medians"], "2026-09-02T10:00:00")
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "demo_medians: render is only 14 B — probably a blank device" in cap.err
+    assert "ok  demo_medians  (table, 2 rows" in cap.out
+
+
+def test_an_earlier_blank_render_of_a_title_is_checked(tmp_path, capsys):
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    _write_manifest(root, [
+        _entry(root, "demo_cell_counts", "2026-09-02T10:00:05", chunk_label="cell-counts",
+               size=10),
+        _entry(root, "demo_cell_counts", "2026-09-02T10:00:06", chunk_label="cell-counts")])
+    assert figrun.verify(root, chunks, ["cell-counts"], "2026-09-02T10:00:00") == 1
+    assert ("demo_cell_counts: render is only 14 B — probably a blank device"
+            in capsys.readouterr().err)
+
+
+def test_a_figure_and_a_table_may_share_a_title(tmp_path, capsys):
+    """figsync resolves figures and tables separately, so both are legitimate."""
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    _write_manifest(root, [
+        _entry(root, "demo_medians", "2026-09-02T10:00:05", chunk_label="cell-counts"),
+        _table_entry(root, "demo_medians", "2026-09-02T10:00:06", SMALL_TABLE,
+                     chunk_label="donor-medians")])
+    assert figrun.verify(root, chunks, ["cell-counts", "donor-medians"],
+                         "2026-09-02T10:00:00") == 0
+    assert "verified 1 figure(s) and 1 table(s)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("first_qmd, rc_expected", [
+    (None, 0), ("/elsewhere/OTHER/analysis/OTHER.qmd", 1)], ids=["same-notebook", "elsewhere"])
+def test_a_table_saved_twice_is_read_against_its_newest_record(tmp_path, capsys, first_qmd,
+                                                               rc_expected):
+    """A table is overwritten in place, so the earlier save's record (one row) no longer
+    describes the file and is not compared with it; its path and provenance still are."""
+    root, qmd = _write_qmd(tmp_path, TABLE_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    first = _table_entry(root, "demo_donor_medians", "2026-09-02T10:00:05",
+                         "donor,arm,value\nD1,treated,0.42\n", chunk_label="donor-medians",
+                         n_rows=1, qmd_path=first_qmd)
+    second = _table_entry(root, "demo_donor_medians", "2026-09-02T10:00:06", SMALL_TABLE,
+                          chunk_label="donor-medians")
+    _write_manifest(root, [first, second])
+    rc = figrun.verify(root, chunks, ["donor-medians"], "2026-09-02T10:00:00")
+    cap = capsys.readouterr()
+    assert rc == rc_expected, cap.err
+    assert "ok  demo_donor_medians  (table, 2 rows" in cap.out
+    if rc_expected:
+        assert "demo_donor_medians: qmd_path is outside this experiment" in cap.err
+    else:
+        assert "overwritten by a later save of the same title in this run" in cap.out
+        assert "verified 1 table(s)" in cap.out
+
+
 def test_verify_notes_a_static_title_that_did_not_appear(tmp_path, capsys):
     root, qmd = _write_qmd(tmp_path)
     chunks = figrun.parse_chunks(qmd)
@@ -413,3 +905,40 @@ def test_missing_runner_is_a_clear_error(monkeypatch):
     monkeypatch.setattr(figrun.shutil, "which", lambda x: None)
     with pytest.raises(SystemExit, match="not on PATH"):
         figrun.runner_command({"runner": "rlog"}, "e.R", "p.json", "EXP", "t", "why")
+
+
+# ── --qmd: choosing among an experiment's several notebooks ───────────────────
+
+def _exp_tree(tmp_path):
+    """An experiment root holding three notebooks, the way the GateLab paper's does."""
+    adir = tmp_path / "exp" / "analysis"
+    adir.mkdir(parents=True)
+    for name in ("E.qmd", "E-roundtrip.qmd", "E-cytof.qmd"):
+        (adir / name).write_text("---\ntitle: t\n---\n")
+    return adir / "E.qmd"
+
+
+def test_select_qmd_accepts_a_bare_name_a_stem_and_a_path(tmp_path):
+    bound = _exp_tree(tmp_path)
+    root = str(bound.parent.parent)
+    want = str(bound.parent / "E-roundtrip.qmd")
+    assert figrun._select_qmd(root, "E-roundtrip.qmd") == want
+    assert figrun._select_qmd(root, "E-roundtrip") == want
+    assert figrun._select_qmd(root, want) == want
+
+
+def test_select_qmd_refuses_a_notebook_outside_this_experiment(tmp_path):
+    bound = _exp_tree(tmp_path)
+    other = tmp_path / "other" / "analysis"
+    other.mkdir(parents=True)
+    (other / "F.qmd").write_text("---\ntitle: t\n---\n")
+    # Running another experiment's notebook under this experiment's id would file its
+    # renders and MANIFEST entries under the wrong experiment.
+    with pytest.raises(SystemExit, match="must name a notebook of this experiment"):
+        figrun._select_qmd(str(bound.parent.parent), str(other / "F.qmd"))
+
+
+def test_select_qmd_names_what_the_experiment_holds_when_it_misses(tmp_path):
+    bound = _exp_tree(tmp_path)
+    with pytest.raises(SystemExit, match="E-cytof.qmd, E-roundtrip.qmd, E.qmd"):
+        figrun._select_qmd(str(bound.parent.parent), "nope")

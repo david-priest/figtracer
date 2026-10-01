@@ -109,7 +109,12 @@ def resolve_panel_full(src: str, manifest: str | None,
             candidates.append(idx[src])
     if not candidates:
         raise KeyError(f"title '{src}' not found in any manifest under {manifest}")
-    chosen = max(candidates, key=lambda p: p.saved_at)
+    # Format first, recency second. load_index already prefers `prefer_format` WITHIN one
+    # manifest, but an experiment has several (f2's outputs/ and the per-notebook folders),
+    # and picking purely by recency across them hands back a PDF whenever the PDF happens to
+    # be the newer render of that title -- which assemble cannot read.
+    preferred = [p for p in candidates if p.fig_format == prefer_format]
+    chosen = max(preferred or candidates, key=lambda p: p.saved_at)
     if not os.path.isfile(chosen.path):
         raise FileNotFoundError(f"resolved '{src}' -> {chosen.path} but file is missing")
     return chosen.path, chosen

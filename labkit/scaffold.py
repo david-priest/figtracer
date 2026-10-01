@@ -110,6 +110,31 @@ data_dir <- "{data_dir}"
 '''
 
 
+
+def _ensure_here_marker(data_base, exp_id):
+    """Write the `.here` file that anchors here::here() to THIS experiment.
+
+    Without it, seekit's set_project_root.R walks up past the experiment folder to the first
+    ancestor that looks like a project root — which is the PROJECT directory, because it holds
+    .git — and here::i_am("analysis/<exp>.qmd") then fails with "Could not find associated
+    project in working directory or any parent directory".
+
+Three experiments in a series each had one and the fourth did not, so the fourth hit
+    this on the first chunk of its analysis (2026-08-25). It is a recurring failure precisely
+    because the file is invisible in Finder and nothing references it, so nobody notices it is
+    missing until R stops. Creating it at scaffold time is the only fix that does not rely on
+    remembering.
+    """
+    marker = os.path.join(data_base, ".here")
+    if os.path.exists(marker):
+        return
+    with open(marker, "w", encoding="utf-8") as handle:
+        handle.write(
+            f"{exp_id} — experiment root. Anchors here::here() and seekit's set_project_root.R\n"
+            f"to THIS folder. Without it they walk up to the project root (which has .git) and\n"
+            f'here::i_am("analysis/{exp_id}.qmd") fails with "Could not find associated project".\n')
+
+
 def _ensure_render_gitignored(exp_root: str) -> None:
     """Keep the figtracer render layer out of git. f2/figtracer write per-render snapshot
     qmds, ``sessioninfo.txt``, and image renders (svg/png/pdf — including large ``plot_spill``
@@ -159,14 +184,20 @@ def new(project: str, title: str, platform: str | None = None,
     # and were renaming the generated PROJECT-YYYY-MM-DD-A tree in both roots after every
     # scaffold. Renaming was always safe -- the hub is resolved by its `role: hub` frontmatter,
     # not its filename -- but it is a manual step that can be skipped instead.
+    explicit_id = bool(exp_id)
     exp_id = _check_id(exp_id, vault_exp_dir) if exp_id else _next_id(vault_exp_dir, project, date)
     slug = _slug(title)
+    # A hand-supplied id is already the name the lab uses. Appending the title slug to it
+    # produces `PROJ-cell-assay cell-assay-across-runs`, where the second half only repeats
+    # the first -- so the folders were being renamed by hand after every scaffold.
+    # Generated ids keep the slug: `CMV-2026-09-04-A` alone says nothing about the work.
+    folder_name = exp_id if explicit_id else f"{exp_id} {slug}"
 
     # vault note folder + attachments. The hub is named as a **folder note** (stem == its
     # folder) so Obsidian folder-note plugins open it when you click the folder — the note's
     # "I am this experiment's front page" signal. Its frontmatter also carries `role: hub`, so
     # resolution never depends on the filename (see sync._canonical); rename it freely.
-    note_folder = os.path.join(vault_exp_dir, f"{exp_id} {slug}")
+    note_folder = os.path.join(vault_exp_dir, folder_name)
     os.makedirs(os.path.join(note_folder, "attachments"), exist_ok=True)
     note_path = os.path.join(note_folder, os.path.basename(note_folder) + ".md")
 
@@ -180,6 +211,11 @@ def new(project: str, title: str, platform: str | None = None,
     #   scripts/    per-experiment builders and renderers
     #   outputs/    ALL derived figures, with ONE MANIFEST.jsonl beside them
     #   deck/       a results presentation and its generator, if there is one
+    #   runs/       one folder per acquisition, each with its own run.yaml + protocol/ + data/
+    #
+    # Most experiments have a single run and leave `runs/` empty. An assay that accumulates
+    # over months does not, and `figtracer run new` fills it. Runs hold INPUTS only -- figures
+    # stay in the experiment's single outputs/ for the same reason as below.
     #
     # `outputs/` is deliberately the single figure destination. Splitting figures by the tool
     # that produced them (an `exports/` for one renderer, a `data/outputs/` for another) gives
@@ -203,14 +239,17 @@ def new(project: str, title: str, platform: str | None = None,
         existing_qmd = sorted(glob_qmds(existing_data))
         qmd_path = existing_qmd[0] if existing_qmd else "(no qmd yet — create in analysis/)"
     else:
-        data_base = os.path.join(p["data_root"], f"{exp_id} {slug}")
+        data_base = os.path.join(p["data_root"], folder_name)
         data_dir = os.path.join(data_base, "data")
         analysis_dir = os.path.join(data_base, "analysis")
         exports_dir = os.path.join(data_base, "outputs")      # the single figure destination
         for d in (data_dir, analysis_dir, exports_dir,
                   os.path.join(data_base, "protocol"),
-                  os.path.join(data_base, "scripts")):
+                  os.path.join(data_base, "scripts"),
+                  os.path.join(data_base, "deck"),
+                  os.path.join(data_base, "runs")):
             os.makedirs(d, exist_ok=True)
+        _ensure_here_marker(data_base, exp_id)
         _ensure_render_gitignored(data_base)
         qmd_path = os.path.join(analysis_dir, f"{exp_id}.qmd")
         panel_block = "_Antibody/metal panel, sample list, conditions. Lives in the protocol sheet; summarise here._"

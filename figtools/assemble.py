@@ -36,6 +36,15 @@ from .units import fmt
 def _load_panel(src: str, manifest_root: str | None, prefix: str, font: str,
                 clip_clean: str = "canvas", white_clean: str = "chrome"):
     path, meta = manifest.resolve_panel_full(src, manifest_root)
+    # Assembly is SVG-only. Saying so beats the twenty lines of lxml parser internals that
+    # `etree.parse` raises on a PDF, which name neither the panel nor the reason.
+    if os.path.splitext(path)[1].lower() != ".svg":
+        raise SystemExit(
+            f"panel '{src}' resolves to {os.path.basename(path)}, which is not an SVG.\n"
+            f"  figtools assembles SVG only. Convert that render and register the SVG:\n"
+            f"    pdftocairo -svg <render> panel.svg && figtracer fig register panel.svg "
+            f"--title <title>-svg --source-kind generated-svg"
+        )
     tree = svgdoc.load(path)
     root = tree.getroot()
     w_pt, h_pt = svgdoc.root_size_pt(root)

@@ -75,3 +75,27 @@ def test_manifest_resolves_newest_render_per_title(tmp_path):
     rec2 = figtracer.savefig(_fig("green"), title="umap", outputs=str(out), format="svg")
     idx = _manifest.load_index(str(out / "MANIFEST.jsonl"))
     assert idx["umap"].path.endswith(rec2["rel_path"].split("/")[-1])
+
+
+# ── panel resolution: format beats recency, and a non-SVG panel says so ───────
+
+def test_resolve_prefers_the_svg_even_when_a_pdf_is_newer(tmp_path):
+    """An experiment has several manifests. Picking purely by recency across them hands
+    back a PDF whenever the PDF is the newer render of that title, and assemble cannot
+    read one."""
+    import json
+    from figtools import manifest as mf
+
+    def write(dirname, fmt, when):
+        d = tmp_path / dirname
+        d.mkdir(parents=True, exist_ok=True)
+        fig = d / f"panel.{fmt}"
+        fig.write_text("<svg xmlns='http://www.w3.org/2000/svg'/>" if fmt == "svg" else "%PDF-1.4")
+        (d / "MANIFEST.jsonl").write_text(json.dumps({
+            "title": "panel", "rel_path": fig.name, "fig_format": fmt, "saved_at": when,
+        }) + "\n")
+
+    write("a", "svg", "2026-01-01T00:00:00+09:00")
+    write("b", "pdf", "2026-06-01T00:00:00+09:00")     # newer, wrong format
+    path, _ = mf.resolve_panel_full("panel", str(tmp_path))
+    assert path.endswith(".svg")

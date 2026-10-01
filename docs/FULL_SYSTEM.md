@@ -114,6 +114,12 @@ indicates confirmation is required. Run `figtracer <command> -h` for the exact o
 
 ## Useful next steps
 
+- `figtracer figrun --exp <ID> --changed` — re-render every figure chunk whose newest render
+  predates the notebook's last edit, headlessly, from the `.qmd` itself; `--list` shows how each
+  chunk is classified.
+- `figtracer notecheck --exp <ID>` — every number in the experiment's notes must exist in its
+  current outputs; `--where <value>` names the chunk or table that produced one. `figtracer sync`
+  runs it before committing.
 - `figtracer fig <subcommand>` — inspect, normalize, assemble, check, render, verify, embed, or
   watch figures.
 - `figtracer data` — scan and register analysis objects.

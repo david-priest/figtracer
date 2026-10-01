@@ -19,10 +19,12 @@
   esc <- function(s) gsub('"', '\\\\"', gsub('\\\\', '\\\\\\\\', s))
   parts <- vapply(names(x), function(k) {
     v <- x[[k]]
+    scalar <- function(z) if (is.logical(z)) tolower(as.character(z))
+                          else if (is.numeric(z)) format(z, trim = TRUE, scientific = FALSE)
+                          else paste0('"', esc(as.character(z)), '"')
     val <- if (is.null(v) || (length(v) == 1 && is.na(v))) "null"
-           else if (is.logical(v)) tolower(as.character(v))
-           else if (is.numeric(v)) format(v, trim = TRUE, scientific = FALSE)
-           else paste0('"', esc(as.character(v)), '"')
+           else if (length(v) > 1) paste0("[", paste(vapply(v, scalar, character(1)), collapse = ", "), "]")
+           else scalar(v)
     paste0('"', k, '": ', val)
   }, character(1))
   paste0("{", paste(parts, collapse = ", "), "}")
@@ -97,6 +99,43 @@ saveFig <- function(p, title = NULL, w = 7, h = 5, format = c("svg", "pdf", "png
   cat(.sb_json_line(rec), "\n", sep = "", file = file.path(outputs, "MANIFEST.jsonl"), append = TRUE)
   message(sprintf("saveFig: %s -> %s", title, file.path(basename(folder), fig)))
   invisible(rec)
+}
+
+#' Save a table as a first-class artefact: `<outputs>/<title>.csv`, overwritten in place, plus a
+#' MANIFEST line with `kind = "table"`. `figtracer figsync place --table` puts it in a note and
+#' `figsync sync` keeps the note's copy in step; `figtracer notecheck` counts its numbers as sourced.
+#' @param df A data frame (or matrix). @param title Filename-safe identifier; the MANIFEST key.
+#' @param digits Round numeric columns before writing, so the file shows what the note shows.
+#' @return (invisibly) the path written.
+saveTable <- function(df, title, embed = TRUE, digits = NULL, channel = "note", outputs = NULL) {
+  stopifnot(is.character(title), length(title) == 1L, grepl("^[A-Za-z0-9][A-Za-z0-9_.-]*$", title))
+  df <- as.data.frame(df, check.names = FALSE, stringsAsFactors = FALSE)
+  if (!is.null(digits)) for (j in seq_along(df)) if (is.numeric(df[[j]])) df[[j]] <- round(df[[j]], digits)
+  if (is.null(outputs)) outputs <- file.path(getwd(), "outputs")
+  dir.create(outputs, recursive = TRUE, showWarnings = FALSE)
+  path <- file.path(outputs, paste0(title, ".csv"))
+  utils::write.csv(df, path, row.names = FALSE)
+  rec <- list(
+    kind        = "table",
+    fig         = basename(path),
+    rel_path    = basename(path),
+    title       = title,
+    channel     = channel,
+    embed       = isTRUE(embed),
+    fig_format  = "csv",
+    n_rows      = nrow(df),
+    n_cols      = ncol(df),
+    columns     = names(df),
+    timestamp   = format(Sys.time(), "%Y-%m-%d_%H.%M.%S"),
+    saved_at    = format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
+    qmd_path    = .sb_qmd_path(),
+    chunk_label = .sb_chunk_label(),
+    git_commit  = .sb_git_commit(outputs),
+    r_version   = paste(R.version$major, R.version$minor, sep = ".")
+  )
+  cat(.sb_json_line(rec), "\n", sep = "", file = file.path(outputs, "MANIFEST.jsonl"), append = TRUE)
+  cat(sprintf("saveTable: %s -> outputs/%s (%d rows x %d cols)\n", title, basename(path), nrow(df), ncol(df)))
+  invisible(path)
 }
 
 #' @rdname saveFig

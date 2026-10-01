@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+<title id="title">Re-render from the notebook</title>
+<desc id="desc">An existing blue response plot is redrawn in orange after a notebook edit. figrun loads the saved analysis, runs prerequisites and the selected plot chunk verbatim, skips configured expensive chunks, and verifies the new render. figsync then updates the note in place. Headless rerendering currently supports R notebooks.</desc>
+<rect x="0" y="0" width="1200" height="520" rx="0" fill="#FFFFFF" stroke="none" stroke-width="1"/>
+<rect x="18" y="18" width="1164" height="484" rx="24" fill="#FCFAF5" stroke="none" stroke-width="1"/>
+<text x="52" y="69" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="32" font-weight="700" text-anchor="start">Edit the notebook. Refresh the figure.</text>
+<text x="52" y="103" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="start">Run the figure code already in your notebook, without reopening the analysis session.</text>
+<text x="62" y="153" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="15" font-weight="600" text-anchor="start">Previous render</text>
+<path d="M78 307.0 L323 307.0" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M78 265.6666666666667 L323 265.6666666666667" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M78 224.33333333333331 L323 224.33333333333331" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M78 183.0 L323 183.0" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M78.0 286.3 L127.0 269.8 L176.0 247.1 L225.0 226.4 L274.0 214.0 L323.0 207.4 L323 307 L78 307 Z" fill="#E8F0F6" stroke="none" stroke-width="0" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M78.0 286.3 L127.0 269.8 L176.0 247.1 L225.0 226.4 L274.0 214.0 L323.0 207.4" fill="none" stroke="#467FA8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="78.0" cy="286.3333333333333" r="4.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="2.2"/>
+<circle cx="127.0" cy="269.8" r="4.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="2.2"/>
+<circle cx="176.0" cy="247.06666666666666" r="4.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="2.2"/>
+<circle cx="225.0" cy="226.4" r="4.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="2.2"/>
+<circle cx="274.0" cy="214.0" r="4.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="2.2"/>
+<circle cx="323.0" cy="207.38666666666666" r="4.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="2.2"/>
+<text x="78" y="335" fill="#467FA8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" text-anchor="start">blue</text>
+<path d="M350 238 H404 M395 229 L405 238 L395 247" fill="none" stroke="#127D72" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="436" y="153" fill="#127D72" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="15" font-weight="600" text-anchor="start">New render</text>
+<path d="M450 307.0 L695 307.0" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M450 265.6666666666667 L695 265.6666666666667" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M450 224.33333333333331 L695 224.33333333333331" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M450 183.0 L695 183.0" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M450.0 286.3 L499.0 269.8 L548.0 247.1 L597.0 226.4 L646.0 214.0 L695.0 207.4 L695 307 L450 307 Z" fill="#FBE9DF" stroke="none" stroke-width="0" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M450.0 286.3 L499.0 269.8 L548.0 247.1 L597.0 226.4 L646.0 214.0 L695.0 207.4" fill="none" stroke="#D86634" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="450.0" cy="286.3333333333333" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="499.0" cy="269.8" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="548.0" cy="247.06666666666666" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="597.0" cy="226.4" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="646.0" cy="214.0" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="695.0" cy="207.38666666666666" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<text x="450" y="335" fill="#D86634" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" text-anchor="start">orange</text>
+<circle cx="661" cy="330" r="10" fill="#E6F3ED" stroke="none" stroke-width="1"/>
+<path d="M657 330 l3 3 l6 -7" fill="none" stroke="#127D72" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="679" y="335" fill="#127D72" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="start">verified</text>
+<text x="62" y="373" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" text-anchor="start">Same data. Edited colour. The note’s figure is replaced in place.</text>
+<path d="M774 142 L774 374" fill="none" stroke="#D7DEDD" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="808" y="155" fill="#127D72" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="650" text-anchor="start">figrun</text>
+<circle cx="819" cy="186" r="8" fill="#E6F3ED" stroke="none" stroke-width="1"/>
+<path d="M815 186 l3 3 l6 -7" fill="none" stroke="#127D72" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="840" y="191" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" text-anchor="start">Load the saved analysis</text>
+<circle cx="819" cy="222" r="8" fill="#E6F3ED" stroke="none" stroke-width="1"/>
+<path d="M815 222 l3 3 l6 -7" fill="none" stroke="#127D72" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="840" y="227" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" text-anchor="start">Run prerequisite chunks</text>
+<circle cx="819" cy="258" r="8" fill="#E6F3ED" stroke="none" stroke-width="1"/>
+<path d="M815 258 l3 3 l6 -7" fill="none" stroke="#127D72" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="840" y="263" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" text-anchor="start">Run the selected plot chunk</text>
+<circle cx="819" cy="294" r="8" fill="#E6F3ED" stroke="none" stroke-width="1"/>
+<path d="M815 294 l3 3 l6 -7" fill="none" stroke="#127D72" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="840" y="299" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" text-anchor="start">Verify the new render</text>
+<circle cx="819" cy="335" r="8" fill="#EDF0F1" stroke="none" stroke-width="1"/>
+<path d="M815 335 L823 335" fill="none" stroke="#566A73" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="840" y="340" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" text-anchor="start">Skip expensive chunks¹</text>
+<rect x="42" y="401" width="1116" height="70" rx="12" fill="#172B35" stroke="none" stroke-width="1"/>
+<text x="61" y="429" fill="#A4E3CF" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" font-weight="550" text-anchor="start">figtracer figrun --exp EXP01 response-plot</text>
+<text x="61" y="452" fill="#CCDADD" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="start">Re-render this chunk from the R notebook.</text>
+<path d="M574 435 H612 M604 427 L614 435 L604 443" fill="none" stroke="#92B4BB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="638" y="429" fill="#A4E3CF" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" font-weight="550" text-anchor="start">figtracer figsync sync --exp EXP01 -y</text>
+<text x="638" y="452" fill="#CCDADD" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="start">Refresh the figure embedded in the note.</text>
+<text x="52" y="491" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" text-anchor="start">¹ Expensive calls are configurable. This example reuses a saved analysis. Headless figure execution currently supports R.</text>
+</svg>

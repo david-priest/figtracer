@@ -3,11 +3,12 @@
 `figtracer <command> [args]` forwards to the right tool:
 
   demo                   -> figtracer.demo      (zero-config figure-to-note tour)
-  new / index / init     -> labkit
+  new / run / index / init -> labkit
   fig <sub>              -> figtools
   protocol               -> figtracer.protocol  (shim: forwards to protokit)
   sync                   -> figtracer.sync       (the close-the-loop roundup)
   vault <sub>            -> figtracer.vault      (whole-vault health checks)
+  notecheck              -> figtracer.notecheck  (numbers in notes exist in outputs)
 
 It deliberately stays a dispatcher: each sub-tool owns its own argument parsing, so the
 machinery has one entry point without re-implementing anything. The old `labkit`/`figtools`
@@ -26,6 +27,7 @@ usage: figtracer <command> [args]
 
   experiment lifecycle (labkit)
     new           scaffold a fully cross-linked experiment
+    run <sub>     new | list | sync — runs (one acquisition each) nested in an experiment
     index         rebuild a project's Mission Control dashboard
     init          write the per-machine user config
 
@@ -45,6 +47,7 @@ usage: figtracer <command> [args]
 
   whole-vault health
     vault lint    broken links, ambiguous filenames, orphaned attachments (read-only)
+    notecheck     every number in a note exists in the experiment's outputs (read-only)
 
   close the loop
     sync          end-of-session roundup: figures -> note -> Mission Control -> commit
@@ -74,7 +77,7 @@ def main(argv=None) -> int:
         from figtracer import demo
         return demo.main(rest)
 
-    if cmd in ("new", "index", "init"):
+    if cmd in ("new", "run", "index", "init"):
         from labkit.cli import main as labkit_main
         return labkit_main([cmd] + rest)
 
@@ -105,6 +108,10 @@ def main(argv=None) -> int:
         if not rest or rest[0] in ("-h", "--help"):
             return vault.main(["-h"])
         return vault.main(rest)
+
+    if cmd == "notecheck":
+        from figtracer import notecheck
+        return notecheck.main(rest)
 
     if cmd == "export":
         from figtracer import export

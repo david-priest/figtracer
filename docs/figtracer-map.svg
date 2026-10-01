@@ -1,57 +1,103 @@
-<svg viewBox="0 0 760 416" xmlns="http://www.w3.org/2000/svg" role="img" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
-  <title>figtracer: start with the figure loop, grow into the full system</title>
-  <desc>Tier one, the figure loop you benefit from immediately: your analysis in R or Python saves figures which flow through MANIFEST.jsonl into a living lab note that auto-resyncs. Tier two, optional: figtracer new, figrun, Mission Control, and figtracer sync.</desc>
-
-  <defs>
-    <marker id="ah" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">
-      <path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/>
-    </marker>
-  </defs>
-
-  <!-- ===== Tier 1: the wedge (accent) ===== -->
-  <rect x="16" y="34" width="728" height="160" rx="12" fill="#eff5ff" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="34" y="60" font-size="14" font-weight="700" fill="#1d4ed8">① Start here — figures → living notes · benefit today</text>
-
-  <rect x="34" y="86" width="204" height="84" rx="9" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="136" y="122" text-anchor="middle" font-size="14" font-weight="700" fill="#111827">Your analysis</text>
-  <text x="136" y="143" text-anchor="middle" font-size="11.5" fill="#6b7280">R saveFig()</text>
-  <text x="136" y="158" text-anchor="middle" font-size="11.5" fill="#6b7280">Python savefig()</text>
-
-  <line x1="238" y1="128" x2="286" y2="128" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="262" y="120" text-anchor="middle" font-size="10.5" fill="#6b7280">save</text>
-
-  <rect x="288" y="86" width="176" height="84" rx="9" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="376" y="122" text-anchor="middle" font-size="13.5" font-weight="700" fill="#111827">MANIFEST.jsonl</text>
-  <text x="376" y="145" text-anchor="middle" font-size="11.5" fill="#6b7280">the shared seam</text>
-
-  <line x1="464" y1="128" x2="512" y2="128" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="488" y="120" text-anchor="middle" font-size="10.5" fill="#6b7280">embed</text>
-
-  <rect x="514" y="86" width="212" height="84" rx="9" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="620" y="122" text-anchor="middle" font-size="14" font-weight="700" fill="#111827">Living lab note</text>
-  <text x="620" y="145" text-anchor="middle" font-size="11.5" fill="#6b7280">re-syncs on every re-run</text>
-
-  <!-- connector -->
-  <line x1="380" y1="196" x2="380" y2="240" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#ah)"/>
-  <text x="392" y="222" font-size="10.5" fill="#6b7280">when you want more</text>
-
-  <!-- ===== Tier 2: the system (neutral) ===== -->
-  <rect x="16" y="246" width="728" height="154" rx="12" fill="#f5f5f6" stroke="#d4d4d8" stroke-width="1.5"/>
-  <text x="34" y="272" font-size="14" font-weight="700" fill="#111827">② Grow into the full experiment system — optional</text>
-
-  <rect x="34" y="296" width="162" height="82" rx="9" fill="#ffffff" stroke="#d4d4d8" stroke-width="1.5"/>
-  <text x="115" y="332" text-anchor="middle" font-size="13" font-weight="700" fill="#111827">figtracer new</text>
-  <text x="115" y="352" text-anchor="middle" font-size="11" fill="#6b7280">scaffold experiment</text>
-
-  <rect x="212" y="296" width="162" height="82" rx="9" fill="#ffffff" stroke="#d4d4d8" stroke-width="1.5"/>
-  <text x="293" y="332" text-anchor="middle" font-size="13" font-weight="700" fill="#111827">figrun</text>
-  <text x="293" y="352" text-anchor="middle" font-size="11" fill="#6b7280">→ bench sheet</text>
-
-  <rect x="390" y="296" width="162" height="82" rx="9" fill="#ffffff" stroke="#d4d4d8" stroke-width="1.5"/>
-  <text x="471" y="332" text-anchor="middle" font-size="13" font-weight="700" fill="#111827">Mission Control</text>
-  <text x="471" y="352" text-anchor="middle" font-size="11" fill="#6b7280">project dashboard</text>
-
-  <rect x="568" y="296" width="162" height="82" rx="9" fill="#ffffff" stroke="#d4d4d8" stroke-width="1.5"/>
-  <text x="649" y="332" text-anchor="middle" font-size="13" font-weight="700" fill="#111827">figtracer sync</text>
-  <text x="649" y="352" text-anchor="middle" font-size="11" fill="#6b7280">→ git commit</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="730" viewBox="0 0 1200 730" role="img" aria-labelledby="title desc">
+<title id="title">Lab notes that keep up</title>
+<desc id="desc">A Markdown lab note contains an updated response plot, a table of current group means, and a checked value in its prose. The saved figure and table retain their notebook, chunk and git commit in a manifest. A scientist defines the analysis; a coding agent can run figtracer to render, sync and check the record. The diagram is an illustration, not a software interface.</desc>
+<rect x="0" y="0" width="1200" height="730" rx="0" fill="#FFFFFF" stroke="none" stroke-width="1"/>
+<rect x="18" y="18" width="1164" height="694" rx="24" fill="#FCFAF5" stroke="none" stroke-width="1"/>
+<text x="54" y="69" fill="#127D72" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" text-anchor="start">figtracer</text>
+<text x="54" y="137" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="48" font-weight="700" text-anchor="start">Lab notes</text>
+<text x="54" y="197" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="48" font-weight="700" text-anchor="start">that keep up.</text>
+<text x="56" y="239" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" text-anchor="start">With your analysis.</text>
+<path d="M58 296 v20 h25 M63 309 l6 -5 l6 2 l7 -13" fill="none" stroke="#127D72" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="99" y="302" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" text-anchor="start">Figures stay current</text>
+<text x="99" y="327" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" text-anchor="start">Refresh in place after a new render.</text>
+<rect x="58" y="355" width="25" height="21" rx="3" fill="none" stroke="#127D72" stroke-width="2"/>
+<path d="M58 362 L83 362" fill="none" stroke="#127D72" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M68 355 L68 376" fill="none" stroke="#127D72" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="99" y="365" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" text-anchor="start">Tables follow the results</text>
+<text x="99" y="390" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" text-anchor="start">Update from the saved outputs.</text>
+<text x="58" y="432" fill="#127D72" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="28" font-weight="600" text-anchor="start">#</text>
+<text x="99" y="428" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="20" font-weight="600" text-anchor="start">Numbers have a source</text>
+<text x="99" y="453" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" text-anchor="start">Flag values that drift from the run.</text>
+<text x="56" y="507" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" text-anchor="start">R / Python  ·  Markdown  ·  git</text>
+<rect x="450" y="69" width="674" height="450" rx="14" fill="#E9E7DF" stroke="none" stroke-width="1"/>
+<rect x="460" y="57" width="674" height="450" rx="14" fill="#F4F1E9" stroke="#E3E0D8" stroke-width="1"/>
+<rect x="470" y="45" width="674" height="476" rx="14" fill="#FFFFFF" stroke="#DCE4E5" stroke-width="1"/>
+<rect x="470" y="67" width="4" height="59" rx="2" fill="#127D72" stroke="none" stroke-width="1"/>
+<text x="498" y="81" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" text-anchor="start">Lab note</text>
+<text x="498" y="116" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="26" font-weight="650" text-anchor="start">Response over time</text>
+<circle cx="1014" cy="79" r="10" fill="#E6F3ED" stroke="none" stroke-width="1"/>
+<path d="M1010 79 l3 3 l6 -7" fill="none" stroke="#127D72" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1032" y="84" fill="#127D72" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" text-anchor="start">Synced</text>
+<path d="M498 136 L1116 136" fill="none" stroke="#DCE4E5" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="520" y="165" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="start">Response (a.u.)</text>
+<path d="M528 339.0 L828 339.0" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="514" y="344.0" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="end">0</text>
+<path d="M528 287.3333333333333 L828 287.3333333333333" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="514" y="292.3333333333333" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="end">20</text>
+<path d="M528 235.66666666666669 L828 235.66666666666669" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="514" y="240.66666666666669" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="end">40</text>
+<path d="M528 184.0 L828 184.0" fill="none" stroke="#E8EDEF" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="514" y="189.0" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="end">60</text>
+<path d="M528.0 313.2 L588.0 292.5 L648.0 264.1 L708.0 238.2 L768.0 222.8 L828.0 214.5 L828 339 L528 339 Z" fill="#FBE9DF" stroke="none" stroke-width="0" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M528.0 313.2 L588.0 292.5 L648.0 264.1 L708.0 238.2 L768.0 222.8 L828.0 214.5" fill="none" stroke="#D86634" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="528.0" cy="313.1666666666667" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="588.0" cy="292.5" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="648.0" cy="264.0833333333333" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="708.0" cy="238.25" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="768.0" cy="222.75" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<circle cx="828.0" cy="214.48333333333335" r="4.2" fill="#FFFFFF" stroke="#D86634" stroke-width="2.2"/>
+<text x="528.0" y="361" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle">0</text>
+<text x="588.0" y="361" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle">1</text>
+<text x="648.0" y="361" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle">2</text>
+<text x="708.0" y="361" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle">3</text>
+<text x="768.0" y="361" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle">4</text>
+<text x="828.0" y="361" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle">5</text>
+<text x="678.0" y="383" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle">Time (h)</text>
+<path d="M535 406 L562 406" fill="none" stroke="#D86634" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="572" y="411" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="start">treated</text>
+<path d="M528.0 313.2 L588.0 302.8 L648.0 287.3 L708.0 274.4 L768.0 264.1 L828.0 257.9" fill="none" stroke="#467FA8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="528" cy="313.1666666666667" r="3.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="1.8"/>
+<circle cx="588" cy="302.8333333333333" r="3.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="1.8"/>
+<circle cx="648" cy="287.3333333333333" r="3.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="1.8"/>
+<circle cx="708" cy="274.4166666666667" r="3.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="1.8"/>
+<circle cx="768" cy="264.0833333333333" r="3.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="1.8"/>
+<circle cx="828" cy="257.8833333333333" r="3.2" fill="#FFFFFF" stroke="#467FA8" stroke-width="1.8"/>
+<path d="M665 406 L692 406" fill="none" stroke="#467FA8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="702" y="411" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="start">control</text>
+<text x="875" y="170" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="600" text-anchor="start">Final means</text>
+<text x="875" y="203" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">Group</text>
+<text x="1108" y="203" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="end">Mean</text>
+<path d="M875 216 L1110 216" fill="none" stroke="#DCE4E5" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="875" y="244" fill="#467FA8" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" text-anchor="start">control</text>
+<text x="1108" y="244" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="19" font-weight="600" text-anchor="end">31.4</text>
+<path d="M875 260 L1110 260" fill="none" stroke="#EEF1F2" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="875" y="289" fill="#D86634" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" text-anchor="start">treated</text>
+<text x="1108" y="289" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="19" font-weight="600" text-anchor="end">48.2</text>
+<rect x="863" y="314" width="259" height="105" rx="10" fill="#EDF6F1" stroke="none" stroke-width="1"/>
+<text x="879" y="339" fill="#172B35" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" text-anchor="start">The treated mean was</text>
+<text x="879" y="378" fill="#127D72" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="34" font-weight="650" text-anchor="start">48.2</text>
+<circle cx="981" cy="367" r="9" fill="#E6F3ED" stroke="none" stroke-width="1"/>
+<path d="M977 367 l3 3 l6 -7" fill="none" stroke="#127D72" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="997" y="372" fill="#127D72" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" text-anchor="start">Sourced</text>
+<text x="879" y="403" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">Found in the current output.</text>
+<path d="M498 437 L1116 437" fill="none" stroke="#DCE4E5" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="498" y="462" fill="#127D72" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="650" text-anchor="start">Source record</text>
+<text x="636" y="462" fill="#172B35" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="500" text-anchor="start">analysis.qmd</text>
+<text x="791" y="462" fill="#172B35" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="500" text-anchor="start">plot / summary</text>
+<text x="1017" y="462" fill="#172B35" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="500" text-anchor="start">3f2a1c9</text>
+<text x="636" y="484" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" text-anchor="start">notebook</text>
+<text x="791" y="484" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" text-anchor="start">chunks</text>
+<text x="1017" y="484" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" text-anchor="start">git commit</text>
+<text x="498" y="550" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" text-anchor="start">Each save adds to the manifest. Each sync keeps the note current.</text>
+<rect x="42" y="579" width="1116" height="109" rx="15" fill="#172B35" stroke="none" stroke-width="1"/>
+<path d="M67 604 l10 8 l-10 8 M85 622 h11" fill="none" stroke="#8CD5BF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="113" y="620" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="24" font-weight="600" text-anchor="start">Let an agent handle the upkeep.</text>
+<text x="113" y="654" fill="#C5D6DB" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" text-anchor="start">You define the analysis. Plain text, a CLI and AGENTS.md make the work inspectable.</text>
+<text x="768" y="616" fill="#9DE1CD" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" font-weight="600" text-anchor="start">figrun</text>
+<text x="889" y="616" fill="#9DE1CD" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" font-weight="600" text-anchor="start">figsync</text>
+<text x="1021" y="616" fill="#9DE1CD" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" font-weight="600" text-anchor="start">notecheck</text>
+<text x="768" y="641" fill="#C5D6DB" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="start">render</text>
+<text x="889" y="641" fill="#C5D6DB" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="start">sync</text>
+<text x="1021" y="641" fill="#C5D6DB" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" text-anchor="start">check</text>
+<text x="1157" y="706" fill="#566A73" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="10" font-weight="400" text-anchor="end">Illustrated workflow · synthetic data</text>
 </svg>

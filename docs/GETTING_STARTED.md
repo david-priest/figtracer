@@ -98,5 +98,9 @@ headless re-rendering, and end-of-session sync. They are optional layers, not pr
 
 - [Full experiment-system setup](FULL_SYSTEM.md) — vault configuration, project registry,
   scaffolding, Mission Control, and the complete analysis loop.
+- `figtracer figrun` — re-render a notebook's figure chunks headlessly after an edit, and
+  `figtracer notecheck` — check every number in a note against the current outputs. Both resolve
+  the notebook through a registered experiment; see the README's "Re-rendering from the notebook"
+  and "Numbers and tables".
 - [CyTOF example](../examples/cytof) — public R and Python analyses feeding one note.
 - [Analysis doctor](ANALYSIS_DOCTOR.md) — reproducibility checks for analysis documents.

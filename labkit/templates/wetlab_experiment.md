@@ -10,6 +10,7 @@ panel: "{{panel_ref}}"      # → protocol / staining-list sheet
 data_dir: "{{data_dir}}"
 analysis_qmd: "{{analysis_qmd}}"
 exports_dir: "{{exports_dir}}"
+runs: 0                     # acquisitions under runs/ — `figtracer run sync` maintains this
 git_commit:                 # filled from f2 MANIFEST once figures are made
 created: {{date}}
 updated: {{date}}
@@ -58,6 +59,14 @@ _What did we learn? Next experiment?_
 _Flags the next run must act on: protocol changes, budget adjustments, controls that failed, things to test. **One bullet per flag, each stating the action, not just the observation.** If a flag has been made durable elsewhere (a `Protocols/derived/*.md` step, a `protocol.yaml` change), link it here — this section is the index, not the only copy._
 
 _Read every prior run's carry-forward before authoring the next `protocol.yaml` (see the `figtracer-experiment` skill, lifecycle step 2)._
+
+## Runs
+
+_One folder per acquisition under `runs/`. `figtracer run new --run <NAME>` creates one; `figtracer run sync` rewrites the table below. Edit prose around it freely — only what sits between the markers is regenerated._
+
+<!-- figtracer:runs:begin -->
+_No runs yet — `figtracer run new --run <NAME>`._
+<!-- figtracer:runs:end -->
 
 ---
 

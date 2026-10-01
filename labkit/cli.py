@@ -1,4 +1,4 @@
-"""labkit CLI: new (scaffold an experiment), index (rebuild Mission Control)."""
+"""labkit CLI: new (scaffold an experiment), run (runs inside one), index (Mission Control)."""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +10,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pn = sub.add_parser("new", help="scaffold a fully cross-linked experiment")
-    pn.add_argument("title", help="experiment title")
+    pn.add_argument("title", help="experiment title — keep it SHORT, 2-4 words "
+                                  "(it becomes two folder names and a path in every MANIFEST "
+                                  "entry; the slug hard-truncates at 48 chars, mid-word)")
     pn.add_argument("--project", required=True)
     pn.add_argument("--platform", help="override the project default platform")
     pn.add_argument("--config", help="path to projects.yaml")
@@ -25,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--project", required=True)
     pi.add_argument("--config")
 
+    from . import runs as _runs
+    _runs.add_parser(sub)
+
     pini = sub.add_parser("init", help="write the per-machine user config (vault root, etc.)")
     pini.add_argument("--vault-root", help="Obsidian LabNotes vault root (prompted if omitted)")
     pini.add_argument("--data-root", help="optional base directory for experiment data")
@@ -38,6 +43,9 @@ def main(argv=None) -> int:
     if args.cmd == "new":
         from . import scaffold
         return scaffold.run(args)
+    if args.cmd == "run":
+        from . import runs
+        return runs.run(args)
     if args.cmd == "index":
         from . import index_cmd
         return index_cmd.run(args)

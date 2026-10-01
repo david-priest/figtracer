@@ -8,6 +8,7 @@ kind: methods_benchmark     # computational benchmark, not a wet-lab run
 data_dir: "{{data_dir}}"
 analysis_qmd: "{{analysis_qmd}}"
 exports_dir: "{{exports_dir}}"
+runs: 0                     # acquisitions under runs/ — `figtracer run sync` maintains this
 git_commit:                 # filled from f2 MANIFEST once figures are made
 created: {{date}}
 updated: {{date}}
@@ -53,6 +54,14 @@ _Headline findings per axis. What won, where our fix helps, where it doesn't._
 ## 5. Conclusions
 
 _What we learned; what the manuscript claims; next run._
+
+## Runs
+
+_One folder per acquisition under `runs/`. `figtracer run new --run <NAME>` creates one; `figtracer run sync` rewrites the table below. Edit prose around it freely — only what sits between the markers is regenerated._
+
+<!-- figtracer:runs:begin -->
+_No runs yet — `figtracer run new --run <NAME>`._
+<!-- figtracer:runs:end -->
 
 ---
 

@@ -80,3 +80,20 @@ def test_collect_finds_notes_outside_the_experiments_folder(tmp_path, monkeypatc
                                "vault_dir": ["Experiments", "Dataset comparisons"]})
     assert {r["experiment_id"] for r in rows} == {"DEMO-1", "DEMO-2"}
     assert len(seen["patterns"]) == 2
+
+
+# ---- the Runs column --------------------------------------------------------------------
+#
+# Most experiments are a single acquisition and never touch runs/. A column of zeros for them
+# would read as missing data rather than not-applicable, so the cell is blank instead.
+
+def test_runs_column_is_blank_for_a_single_acquisition_experiment():
+    body = index_cmd._table([{"experiment_id": "DEMO-1", "title": "One run", "_note": "/x/DEMO-1.md"}])
+    assert "| Samples | Runs | Updated |" in body
+    assert body.splitlines()[-1].count("|") == 9        # 8 columns => 9 delimiters
+
+
+def test_runs_column_shows_the_count_when_an_experiment_has_runs():
+    body = index_cmd._table([{"experiment_id": "DEMO-assay", "title": "Growing", "runs": 7,
+                              "_note": "/x/DEMO-assay.md"}])
+    assert "| 7 |" in body

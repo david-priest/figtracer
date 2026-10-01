@@ -46,8 +46,8 @@ def _hub_rank(fm: dict, eid: str) -> tuple[bool, bool, bool]:
 
 
 def _table(rows: list[dict]) -> str:
-    head = ("| Experiment | Title | Status | Platform | Samples | Updated | Links |\n"
-            "|---|---|---|---|---|---|---|")
+    head = ("| Experiment | Title | Status | Platform | Samples | Runs | Updated | Links |\n"
+            "|---|---|---|---|---|---|---|---|")
     lines = [head]
     for r in rows:
         eid = r.get("experiment_id", "")
@@ -58,9 +58,14 @@ def _table(rows: list[dict]) -> str:
             links += f" · panel: [[{r['panel']}]]"
         samples = r.get("samples") or []
         nsamp = len(samples) if isinstance(samples, list) else samples
-        lines.append("| {eid} | {title} | `{status}` | {plat} | {ns} | {upd} | {links} |".format(
+        # Runs is blank, not 0, for the many experiments that are a single acquisition and
+        # never touch runs/ — a column of zeros would read as missing data rather than N/A.
+        nruns = r.get("runs")
+        nruns = "" if nruns in (None, "", 0) else nruns
+        lines.append("| {eid} | {title} | `{status}` | {plat} | {ns} | {nr} | {upd} | {links} |".format(
             eid=note_link, title=r.get("title", ""), status=r.get("status", "?"),
-            plat=r.get("platform", ""), ns=nsamp, upd=r.get("updated", ""), links=links))
+            plat=r.get("platform", ""), ns=nsamp, nr=nruns,
+            upd=r.get("updated", ""), links=links))
     return "\n".join(lines)
 
 

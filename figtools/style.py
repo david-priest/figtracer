@@ -47,7 +47,10 @@ def num(s: str | None) -> float | None:
 
 
 def is_white(color: str | None) -> bool:
+    """White in any of the spellings the exporters use. pdftocairo writes its page background
+    as ``rgb(100%, 100%, 100%)`` with spaces, and that rect is larger than the page, so
+    missing it painted every pdftocairo panel over its neighbours in an assembly."""
     if not color:
         return False
-    c = color.strip().lower()
+    c = "".join(color.split()).lower()
     return c in ("#fff", "#ffffff", "white", "rgb(255,255,255)", "rgb(100%,100%,100%)")

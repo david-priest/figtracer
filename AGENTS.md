@@ -33,8 +33,19 @@ analysis runs; a manifest-tracked figure re-syncs.
   data/analysis/outputs directories, cross-linked. Don't hand-create these folders.
 - **Save a figure with provenance:** use `saveFig()` / `savefig()` as above — never `ggsave()` /
   `plt.savefig()` directly if the figure belongs in the note.
-- **Close out a session:** `figtracer sync` — re-embeds figures into the note, updates its
-  status/log, git-commits the data folder (never pushes), and rebuilds the project dashboard.
+- **Re-render a figure after editing its chunk:** `figtracer figrun --exp <ID> <chunk-label>` (or
+  `--changed` for every chunk whose render is older than the notebook). It runs chunk bodies
+  verbatim from the `.qmd` and skips chunks that rebuild the analysis object; never pass
+  `--allow-expensive` on your own initiative, and never run the notebook by hand instead.
+- **Save a table a note will quote:** `saveTable(df, "<title>")` / `savetable(df, "<title>")`, then
+  `figtracer figsync place <title> --table --note <note> -y`. Never type a results table into a
+  note.
+- **Check the numbers in a note:** `figtracer notecheck --exp <ID>`; `--where <value>` says which
+  chunk or table produced one. Fix the note or the chunk; do not add numbers to the ignore list to
+  make the check pass.
+- **Close out a session:** `figtracer sync` — re-embeds figures and tables into the note, updates
+  its status/log, runs notecheck and stops on findings, git-commits the data folder (never
+  pushes), and rebuilds the project dashboard.
   It is **dry-run by default**; pass `-y` only once the user has confirmed.
 - **Share notes with a collaborator:** `figtracer export` (a clean PDF; drops the internal log).
 

@@ -242,6 +242,42 @@ def _do(execute: bool, msg: str) -> None:
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
+def snapshot_console_log(exports_dir: str, eid: str, when: str,
+                         execute: bool = True) -> dict | None:
+    """Write the CURRENT session.log run beside the renders it produced.
+
+    Returns what was (or would be) written, or None when there is no log.
+
+    The stable filename is the whole point. `outputs/<eid>_console.log` is
+    overwritten every time, so like the `outputs/*.csv` it cannot be out of date;
+    the dated copies under `console-logs/` accumulate and go stale exactly the way
+    session.log's older blocks do, so they are an archive to read by hand and not a
+    thing tooling should source numbers from.
+    """
+    from figtracer import sessionlog
+    log_path = os.path.join(os.path.dirname(exports_dir), "session.log")
+    run = sessionlog.current(log_path) if os.path.isfile(log_path) else None
+    if run is None:
+        return None
+    stamp = re.sub(r"[^0-9]", "", run.stamp)[:14] or when.replace("-", "")
+    out = {
+        "stamp": run.stamp, "chunks": run.n_chunks, "lines": len(run.lines),
+        "current": os.path.join(exports_dir, f"{eid}_console.log"),
+        "dated": os.path.join(exports_dir, "console-logs", f"{stamp}_{eid}_console.log"),
+    }
+    if execute:
+        os.makedirs(os.path.dirname(out["dated"]), exist_ok=True)
+        header = (f"# console log for {eid}\n"
+                  f"# run {run.stamp} — {run.n_chunks} chunk(s), {len(run.lines)} lines\n"
+                  f"# snapshotted by figtracer sync {when}\n"
+                  f"# THIS FILE IS OVERWRITTEN each sync; it is the CURRENT run.\n"
+                  f"# Older runs are under console-logs/ and are historical.\n\n")
+        for p in (out["current"], out["dated"]):
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(header + run.text)
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="figtracer sync",
@@ -257,6 +293,10 @@ def main(argv=None) -> int:
                     help="figsync: resolve 'latest' to the newest git-committed render")
     ap.add_argument("--no-index", action="store_true", help="skip Mission Control rebuild")
     ap.add_argument("--no-commit", action="store_true", help="don't git-commit the data folder")
+    ap.add_argument("--no-notecheck", action="store_true",
+                    help="skip the note number-provenance check")
+    ap.add_argument("--allow-note-drift", action="store_true",
+                    help="commit even when a note carries numbers absent from outputs")
     ap.add_argument("--dpi", type=int, default=300, help="figure preview DPI (default 300)")
     ap.add_argument("-y", "--yes", action="store_true", help="execute (default is a dry run)")
     ap.add_argument("--config", help="path to projects.yaml")
@@ -312,8 +352,16 @@ def main(argv=None) -> int:
                         if "Figure provenance" not in os.path.basename(p)]
             fs_attach = os.path.join(note_dir, "attachments")
             figs = figsync.resolve_figures(data_dir, committed_only=args.committed_only)
+            tables = figsync.resolve_tables(data_dir)
+            tres = figsync.materialize_tables(tables, eid, fs_notes, execute=execute)
+            placed = {t: tables[t] for t in tres["synced"] + tres["current"]}
             res = figsync.materialize(figs, eid, note_dir, fs_attach, fs_notes,
-                                      dpi=args.dpi, execute=execute)
+                                      dpi=args.dpi, execute=execute,
+                                      tables=placed, tref=figsync._note_tables(eid, fs_notes))
+            if tres["synced"]:
+                _do(execute, f"figsync: {len(tres['synced'])} table block(s) → "
+                             f"{', '.join(tres['synced'])}")
+                figures_done.extend(f"table:{t}" for t in tres["synced"])
             if res["synced"]:
                 _do(execute, f"figsync: {len(res['synced'])} note figure(s) → "
                              f"{', '.join(res['synced'])}")
@@ -327,6 +375,26 @@ def main(argv=None) -> int:
                       f"(re-run chunks): {', '.join(res['missing'])}")
             if res["unplaced"]:
                 print(f"      · figsync: {len(res['unplaced'])} embed=TRUE figure(s) not placed in a note")
+
+    # 1c — snapshot what the run PRINTED, beside what it plotted.
+    #
+    # f2() already saves the qmd and sessioninfo.txt next to every render, so a figure
+    # carries its code and its environment but not its console output. For a chunk
+    # whose result is a printed table rather than a plot, that output was the only
+    # copy of the numbers, and session.log supersedes it on the next run — which is
+    # how an in-band donor count reached a note as 46 when the run had said 48.
+    #
+    # The stable filename is the point. Dated copies accumulate and go stale exactly
+    # like session.log's older blocks, so the archive copy is for reading by hand and
+    # the OVERWRITTEN one is what tooling reads: it cannot be out of date, for the
+    # same reason the outputs/*.csv cannot.
+    if exports_dir:
+        snap = snapshot_console_log(exports_dir, eid, when, execute=execute)
+        if snap is None:
+            _do(execute, "console log: no session.log to snapshot")
+        else:
+            _do(execute, f"console log: {snap['stamp']} ({snap['chunks']} chunk(s), "
+                         f"{snap['lines']} lines) → {os.path.basename(snap['current'])}")
 
     # 2 — status + log
     _step(2, "Note status + log")
@@ -345,11 +413,57 @@ def main(argv=None) -> int:
         update_frontmatter(note, fm_updates)
         append_log(note, when, args.status, args.note_text, figures_done)
 
+    # 2b — every number in the note must exist in this experiment's current outputs.
+    # Placed before the commit deliberately: a number that was never computed is
+    # cheapest to fix while it is still uncommitted, and committing it is what turns
+    # a typo into provenance. See figtracer/notecheck.py for why re-reading does not
+    # substitute for this.
+    note_drift = 0
+    if args.no_notecheck:
+        _do(execute, "notecheck: skipped (--no-notecheck)")
+    else:
+        from figtracer import notecheck as ntc
+        try:
+            nres = ntc.diagnose(exp=eid)
+        except ValueError as exc:
+            print(f"      ! notecheck could not run: {exc}")
+            nres = None
+        if nres is not None:
+            # Every finding, not just the unsourced ones: a STALE number - true in an
+            # earlier run, not in this one - is the more dangerous of the two, because
+            # it reads as if it had been checked.
+            note_drift = len(nres["findings"])
+            corpus = nres["corpus"]
+            if not note_drift:
+                _do(execute, f"notecheck: clean ({corpus['values']} value(s) in the corpus)")
+            else:
+                n_stale = nres["summary"].get("stale", 0)
+                print(f"      ! notecheck: {note_drift} number(s) not in the current outputs"
+                      + (f" ({n_stale} stale — produced by a superseded run)" if n_stale else ""))
+                shown = nres["findings"] if note_drift <= 15 else nres["findings"][:5]
+                for item in shown:
+                    print(f"          {item['note']}:{item['line']}  {item['value']}")
+                if note_drift > len(shown):
+                    print(f"          ... and {note_drift - len(shown)} more "
+                          f"(figtracer notecheck --exp {eid} --all)")
+                # What the corpus is built from, so an absence can be read correctly.
+                if corpus["session_log_chunks"] is not None:
+                    print(f"          corpus: {corpus['values']} value(s); "
+                          f"{corpus['session_log_chunks']} chunk(s) with a current output across "
+                          f"{corpus.get('session_log_runs', '?')} run(s) of session.log")
+
     # 3 — commit
     _step(3, "Commit data folder")
     commit_hash = None
     if args.no_commit:
         _do(execute, "skipped (--no-commit)")
+    elif note_drift and not args.allow_note_drift:
+        # Refusing is the whole point: committing an unsourced number is what makes it
+        # look checked. Suppress a genuine non-result with `notecheck_ignore:` in the
+        # note's frontmatter, which is auditable, rather than with this flag.
+        _do(execute, f"BLOCKED — {note_drift} unsourced number(s) in the note")
+        print("      ! not committing. Fix the numbers, add them to `notecheck_ignore:`")
+        print("        in the note frontmatter, or pass --allow-note-drift.")
     elif not data_dir or not is_git_repo(data_dir):
         _do(execute, "data_dir is not a git repo — skipping commit")
     elif not git_dirty(data_dir) and not execute:

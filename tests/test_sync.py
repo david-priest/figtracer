@@ -9,6 +9,7 @@ Three hub signals, in preference order — pinned here because BOTH the current 
 (folder note + `role: hub`) and every pre-existing experiment (legacy `<eid>.md`) must resolve:
   1. `role: hub` frontmatter   2. folder note (stem == folder)   3. legacy `<eid>.md`
 """
+import os
 import subprocess
 
 import pytest
@@ -121,3 +122,45 @@ def test_commit_data_dir_rejected_commit_never_returns_stale_head(tmp_path):
 
     assert _git(repo, "rev-parse", "--short", "HEAD") == old_head
     assert _git(repo, "diff", "--cached", "--name-only") == "analysis.qmd"
+
+
+# --- console log snapshot ---------------------------------------------------------
+
+def test_console_snapshot_writes_a_stable_and_a_dated_copy(tmp_path):
+    """The stable copy is what tooling reads; it cannot be out of date.
+
+    The dated copies accumulate and go stale exactly the way session.log's older
+    blocks do, which is why they live in their own subfolder and nothing sources
+    numbers from them.
+    """
+    root = tmp_path / "EXP01"
+    out = root / "outputs"
+    out.mkdir(parents=True)
+    (root / "session.log").write_text(
+        "# ── Session log 2026-01-01 10:00:00 ── #\nold 910\n"
+        "# ── Session log 2026-02-02 11:00:00 ── #\n── [a] ──\nnew 650\n",
+        encoding="utf-8")
+
+    snap = sync.snapshot_console_log(str(out), "EXP01", "2026-02-02")
+    assert snap["stamp"] == "2026-02-02 11:00:00" and snap["chunks"] == 1
+    body = open(snap["current"], encoding="utf-8").read()
+    assert "650" in body and "910" not in body, "only the CURRENT run is snapshotted"
+    assert os.path.basename(snap["current"]) == "EXP01_console.log"
+    assert "console-logs" in snap["dated"] and os.path.isfile(snap["dated"])
+    assert "OVERWRITTEN" in body, "the file must say which copy is authoritative"
+
+
+def test_console_snapshot_is_a_noop_without_a_session_log(tmp_path):
+    out = tmp_path / "EXP01" / "outputs"
+    out.mkdir(parents=True)
+    assert sync.snapshot_console_log(str(out), "EXP01", "2026-02-02") is None
+
+
+def test_console_snapshot_plans_without_writing_when_not_executing(tmp_path):
+    root = tmp_path / "EXP01"
+    out = root / "outputs"
+    out.mkdir(parents=True)
+    (root / "session.log").write_text(
+        "# ── Session log 2026-02-02 11:00:00 ── #\nx 1\n", encoding="utf-8")
+    snap = sync.snapshot_console_log(str(out), "EXP01", "2026-02-02", execute=False)
+    assert snap is not None and not os.path.exists(snap["current"])

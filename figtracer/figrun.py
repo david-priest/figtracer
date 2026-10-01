@@ -36,7 +36,9 @@ are one lab's idioms and another lab's will differ:
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
+import io
 import json
 import os
 import re
@@ -46,6 +48,7 @@ import sys
 import time
 
 from labkit import config as lkconfig
+from figtracer import manifest as _manifest
 from figtracer.sync import resolve
 
 # Chunks that rebuild the object every downstream figure depends on. Re-running
@@ -258,6 +261,32 @@ def _dedupe(chunks: list[Chunk]) -> list[Chunk]:
     return chunks
 
 
+def _select_qmd(root: str, want: str) -> str:
+    """One of this experiment's other notebooks, named by --qmd.
+
+    An experiment may hold several notebooks (a concordance one, a round-trip one, a
+    CyTOF one) while its note's frontmatter can bind only one. Selection stays inside
+    `<root>/analysis/`: naming a notebook of another experiment would render its figures
+    under this experiment's id, which is the mis-filing `get_this_rmd_file` already
+    causes headlessly and which the MANIFEST cannot be talked out of afterwards.
+    """
+    adir = os.path.join(root, "analysis")
+    cands = [want, os.path.join(adir, want), os.path.join(adir, want + ".qmd")]
+    for c in cands:
+        c = os.path.abspath(os.path.expanduser(c))
+        if os.path.isfile(c):
+            if os.path.dirname(c) != os.path.abspath(adir):
+                raise SystemExit(
+                    f"figrun: --qmd must name a notebook of this experiment:\n  {c}\n"
+                    f"  is not in {adir}"
+                )
+            return c
+    have = sorted(os.path.basename(p) for p in glob.glob(os.path.join(adir, "*.qmd")))
+    raise SystemExit(
+        f"figrun: no notebook '{want}' in {adir}\n  it holds: " + (", ".join(have) or "none")
+    )
+
+
 def _exp(args):
     cfg = lkconfig.load(args.config) if args.config else lkconfig.load()
     exp = resolve(cfg, exp=args.exp)
@@ -271,6 +300,8 @@ def _exp(args):
     # Anchoring on the qmd rather than on data_dir is deliberate — it is the thing
     # `here::i_am("analysis/<exp>.qmd")` anchors on too, so the two cannot disagree.
     root = os.path.dirname(os.path.dirname(qmd))
+    if getattr(args, "qmd", None):
+        qmd = _select_qmd(root, args.qmd)
     return str(exp.get("experiment_id")), qmd, root
 
 
@@ -299,7 +330,7 @@ def _newest(entries, key: str) -> dict:
         k = e.get(key)
         if not k:
             continue
-        ts = e.get("saved_at") or e.get("timestamp") or ""
+        ts = _manifest.saved_at_key(e)
         if k not in out or ts >= out[k]:
             out[k] = ts
     return out
@@ -625,6 +656,160 @@ def build_plan(chunks: list[Chunk], targets: list[str], named: list[str],
     return plan, dropped_unnamed
 
 
+def _recorded_shape(entry: dict) -> tuple[int, int, list[str]] | None:
+    """(n_rows, n_cols, columns) as the writer recorded them, or None when any is
+    missing or malformed. docs/MANIFEST.md requires all three for a table, and every
+    table writer records them. Two writer spellings are normalised, both seen in what
+    the writers actually emit: the bundled R shim's JSON writer unboxes a length-1
+    vector, so a one-column table's `columns` is a bare string (and a zero-column
+    table's is ""); seekit's jsonlite writes an NA column name as null, which
+    write.csv puts in the header as NA.
+    """
+    def count(v):
+        return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+    n_rows, n_cols = count(entry.get("n_rows")), count(entry.get("n_cols"))
+    cols = entry.get("columns")
+    if isinstance(cols, str):
+        cols = [cols] if n_cols else []
+    if n_rows is None or n_cols is None or not isinstance(cols, list):
+        return None
+    if any(c is not None and not isinstance(c, str) for c in cols):
+        return None
+    return n_rows, n_cols, ["NA" if c is None else c for c in cols]
+
+
+def _header_is(header: list[str], columns: list[str]) -> bool:
+    """True when `header` is the header write.csv writes for a data frame whose names
+    are `columns`.
+
+    Usually the two are equal. They differ when a column is itself a matrix or a data
+    frame of more than one column: aggregate() with a FUN that returns a vector, or
+    df$stats <- data.frame(a, b). write.table() then writes the frame through
+    as.matrix(), which gives that column one field per sub-column, named
+    `<name>.<sub-name>` (`<name>.1`, `<name>.2`, ... when the sub-columns have no names,
+    and recursively for a nested data frame), while saveTable() records names(df) and
+    ncol(df). So each recorded name, in order, must be written either as itself or as a
+    run of two or more cells that start with `<name>.`, with no cell left over. A
+    one-column matrix, such as a scale() column, keeps its own name.
+    """
+    if header == columns:
+        return True
+    n, m = len(columns), len(header)
+    if m <= n:              # an expansion adds cells; equal lengths leave only equality
+        return False
+    # `reach` holds every j such that the columns placed so far account for header[:j].
+    # A repeated name, or one like `m.a` beside `m`, can make that ambiguous, so every
+    # such j is carried forward. A run of cells starting `<name>.` is scanned once per
+    # column: a later start inside the same run reaches a subset of what the first does.
+    reach = {0}
+    for i, name in enumerate(columns):
+        prefix, room = name + ".", m - (n - i - 1)   # each later column needs a cell
+        nxt, run_end = set(), -1
+        for j in sorted(reach):
+            if j < m and header[j] == name:
+                nxt.add(j + 1)
+            if j < run_end or j >= m or not header[j].startswith(prefix):
+                continue
+            k = j
+            while k < m and header[k].startswith(prefix):
+                k += 1
+            run_end = k
+            nxt.update(range(j + 2, k + 1))
+        reach = {j for j in nxt if j <= room}
+        if not reach:
+            return False
+    return m in reach
+
+
+def _cells(cells: list[str], limit: int = 6) -> str:
+    shown = ", ".join(repr(c if len(c) <= 40 else c[:37] + "...") for c in cells[:limit])
+    return f"[{shown}{', ...' if len(cells) > limit else ''}]"
+
+
+def table_problem(path: str, entry: dict) -> tuple[str, int]:
+    """("", data rows) when the file at `path` is the table `entry` records, else
+    (why not, 0).
+
+    The size floor in `verify` is a FIGURE rule: a graphics device opened and closed
+    with nothing drawn on it still leaves a small file, so a render under 4,000 B is
+    empty in all but name. A table has no such floor. A correct table of a few rows
+    from saveTable() is a couple of hundred bytes, and judging it by the figure rule
+    failed every small table as "probably a blank device", so figrun exited 1 on a
+    chunk that had run correctly. A table is judged as what it is instead.
+
+    The robust check is the writer's own record. saveTable() (seekit and the shim) and
+    figtracer.savetable() write `n_rows`, `n_cols` and `columns` into the entry, so
+    the file's header row must be `columns` as write.csv writes them (equal, or with a
+    matrix or data-frame column expanded; `_header_is`) and it must hold exactly
+    `n_rows` data records. That is what makes a headerless file of data rows, or
+    prose, fail: CSV parsing alone accepts almost any text. What the record does not
+    say is checked structurally, as write.csv writes a file: no NUL byte, strict
+    parsing to the end (a quote that never closes, text after a closing quote), every
+    record as wide as the header, and a newline after the last record, so a write cut
+    short fails even when the cut falls at a comma.
+
+    Encoding: saveTable() calls write.csv with no fileEncoding, so the file is in the
+    R session's native encoding: UTF-8 on macOS and on Windows since R 4.2, Latin-1 in
+    a Latin-1 locale. UTF-8 is tried first (a byte-order mark is accepted) and Latin-1
+    otherwise; Latin-1 maps every byte to a character, so the decode cannot fail and
+    the checks above do the judging. The csv module's 131,072-character field limit is
+    lifted to the file's length for the read, so a long field is not a parse error.
+    """
+    if os.path.getsize(path) == 0:
+        return "table file is empty (0 B)", 0
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError as err:
+        return f"table cannot be read — {err}", 0
+    nul = raw.find(b"\x00")
+    if nul != -1:
+        return f"table does not parse as CSV — it contains a NUL byte (at byte {nul})", 0
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+
+    shape = _recorded_shape(entry)
+    if shape is None:
+        return ("MANIFEST entry does not record the table's shape — n_rows, n_cols and "
+                "columns are required for a table (docs/MANIFEST.md)"), 0
+    n_rows, n_cols, columns = shape
+    if len(columns) != n_cols:
+        return (f"the MANIFEST entry contradicts itself — n_cols is {n_cols} but columns "
+                f"lists {len(columns)}"), 0
+    if n_cols == 0:
+        return "table has no columns (the MANIFEST records n_cols 0)", 0
+
+    limit = csv.field_size_limit()
+    csv.field_size_limit(max(limit, min(len(text) + 1, 2**31 - 1)))
+    try:
+        reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+        header = next(reader, [])
+        if not header:
+            return "table has no header row", 0
+        if not _header_is(header, columns):
+            return (f"header row does not match the columns the MANIFEST records — file "
+                    f"{_cells(header)}, MANIFEST {_cells(columns)}"), 0
+        data = 0
+        for record in reader:
+            data += 1
+            if len(record) != len(header):
+                return (f"table is not rectangular — data row {data} has {len(record)} "
+                        f"field(s), the header has {len(header)}"), 0
+    except csv.Error as err:
+        return f"table does not parse as CSV — {err}", 0
+    finally:
+        csv.field_size_limit(limit)
+    if not text.endswith("\n"):
+        return ("table does not end with a complete record — no newline after the last "
+                "one, so the write was cut short"), 0
+    if data != n_rows:
+        return f"table has {data} data row(s) but the MANIFEST records n_rows {n_rows}", 0
+    return "", data
+
+
 def verify(root, chunks, targets, started) -> int:
     """Assert the renders actually landed here, with this experiment's provenance.
 
@@ -641,15 +826,25 @@ def verify(root, chunks, targets, started) -> int:
 
     Checking only "did a file appear" would have passed on 2026-08-27 — files did
     appear, in the wrong experiment. So each new entry is checked for provenance:
-    under THIS outputs tree, pointing at THIS qmd, and not a blank device.
+    under THIS outputs tree, pointing at THIS qmd, and — for a figure — not a blank
+    device. A table (`kind: table`, see docs/MANIFEST.md) must sit where the contract
+    puts it, `outputs/<title>.csv`, and is checked against its own MANIFEST record by
+    reading it (`table_problem`) instead of by size, then for the same provenance.
+
+    Every entry the run wrote is checked, not only the last one of each title. Keyed
+    by title, a later entry hid an earlier one, so a blank render followed by a table
+    (or a second render) of the same title passed on the later entry alone. A table
+    is overwritten in place, so when a run saves one table title more than once only
+    the newest of those entries still describes the file: the earlier ones are held to
+    the path and provenance rules but not compared with contents they no longer have.
     """
-    fresh: dict[str, dict] = {}
+    fresh: list[dict] = []
     others = 0
     for e in _manifest_entries(root):
         if (e.get("saved_at") or "") < started:
             continue
         if e.get("chunk_label") in targets:
-            fresh[e["title"]] = e
+            fresh.append(e)
         else:
             others += 1
 
@@ -663,18 +858,49 @@ def verify(root, chunks, targets, started) -> int:
         print(f"\nfigrun: VERIFICATION FAILED — {msg}", file=sys.stderr)
         return 1
 
+    # File order is save order (the MANIFEST is append-only), so the last table entry
+    # of a title is the one whose save left the file as it is.
+    newest_table = {e["title"]: i for i, e in enumerate(fresh)
+                    if _manifest.kind(e) == _manifest.TABLE}
     problems, ok = [], []
-    for t in sorted(fresh):
-        e = fresh[t]
+    for i, e in sorted(enumerate(fresh), key=lambda ie: ie[1]["title"]):
+        t = e["title"]
         rel = e.get("rel_path") or e.get("fig") or ""
+        is_table = _manifest.kind(e) == _manifest.TABLE
+        if is_table:
+            # `kind` alone does not make a file a table. The contract puts a table at
+            # outputs/<title>.csv, exactly; without this a blank svglite render labelled
+            # table (under any spelling of .csv) reads as one-column "CSV" text and
+            # leaves the size floor it should fail.
+            if not rel.lower().endswith(".csv"):
+                problems.append(f"  {t}: kind is table but the file is not a CSV — {rel}")
+                continue
+            if rel != f"{t}.csv" or os.path.dirname(rel):
+                problems.append(f"  {t}: kind is table but the entry points at {rel}; a "
+                                f"table is {t}.csv at the root of outputs/ (docs/MANIFEST.md)")
+                continue
+            if e.get("fig_format") not in (None, "csv"):
+                problems.append(f"  {t}: kind is table but fig_format is "
+                                f"{e.get('fig_format')!r}, not 'csv'")
+                continue
         path = os.path.join(root, "outputs", rel)
         if not os.path.exists(path):
             problems.append(f"  {t}: MANIFEST points at a missing file — {rel}")
             continue
         size = os.path.getsize(path)
-        if size < 4000:
+        if is_table and i != newest_table[t]:
+            detail = "table, overwritten by a later save of the same title in this run"
+        elif is_table:
+            why, n_rows = table_problem(path, e)
+            if why:
+                problems.append(f"  {t}: {why}")
+                continue
+            detail = f"table, {n_rows} row{'' if n_rows == 1 else 's'}, {size} B"
+        elif size < 4000:
             problems.append(f"  {t}: render is only {size} B — probably a blank device")
             continue
+        else:
+            detail = f"{size/1024:.0f} KB"
         qp = e.get("qmd_path")
         if not qp:
             problems.append(f"  {t}: MANIFEST entry has no qmd_path")
@@ -683,10 +909,10 @@ def verify(root, chunks, targets, started) -> int:
         if os.path.dirname(os.path.dirname(qp)) != os.path.abspath(root):
             problems.append(f"  {t}: qmd_path is outside this experiment — {qp}")
             continue
-        ok.append((t, path, size))
+        ok.append((t, path, detail, is_table))
 
-    for t, path, size in ok:
-        print(f"  ok  {t}  ({size/1024:.0f} KB)\n      {path}")
+    for t, path, detail, _ in ok:
+        print(f"  ok  {t}  ({detail})\n      {path}")
     if problems:
         print("\nfigrun: VERIFICATION FAILED", file=sys.stderr)
         print("\n".join(problems), file=sys.stderr)
@@ -699,12 +925,17 @@ def verify(root, chunks, targets, started) -> int:
     for c in chunks:
         if c.label in targets:
             predicted |= chunk_titles(c, static_only=True)
-    missed = sorted(predicted - set(fresh))
+    missed = sorted(predicted - {e["title"] for e in fresh})
     if missed:
         print(f"\n  note: declared but not written this run: {', '.join(missed)}")
         print("        (a conditional inside the chunk probably skipped it)")
 
-    print(f"\nfigrun: verified {len(ok)} figure(s) into {os.path.basename(root)}/outputs")
+    n_tables = len({t for t, _, _, is_table in ok if is_table})
+    n_figures = len({t for t, _, _, is_table in ok if not is_table})
+    what = [f"{n_figures} figure(s)"] if n_figures or not n_tables else []
+    if n_tables:
+        what.append(f"{n_tables} table(s)")
+    print(f"\nfigrun: verified {' and '.join(what)} into {os.path.basename(root)}/outputs")
     return 0
 
 
@@ -715,6 +946,9 @@ def main(argv=None) -> int:
     p.add_argument("labels", nargs="*", help="chunk labels to run")
     p.add_argument("--exp", required=True, help="experiment id")
     p.add_argument("--config", help="path to projects.yaml")
+    p.add_argument("--qmd", help="notebook to run, when the experiment holds several "
+                                "(a name or path inside its analysis/ folder); "
+                                "default is the analysis_qmd its note binds")
     p.add_argument("--list", action="store_true", help="show chunks and stop")
     p.add_argument("--awaiting", action="store_true",
                    help="chunks whose f2(embed=TRUE) titles the MANIFEST has never seen")

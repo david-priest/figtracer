@@ -4,14 +4,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/david-priest/figtracer/actions/workflows/ci.yml/badge.svg)](https://github.com/david-priest/figtracer/actions/workflows/ci.yml)
 
-figtracer keeps the figures in a Markdown lab note in step with the R or Python code that made
-them. Each figure save appends a line to a manifest recording the figure's title, size, source
-file, generator and git commit. A note embeds figures by title, and one command replaces each
-embedded figure with its newest render and writes a provenance table beside it.
+figtracer keeps a Markdown lab note in step with the R or Python analysis behind it. It does three things.
 
-It exists because the write-up usually lives in a different document from the analysis. A lab
-note, an Obsidian vault or a manuscript draft is not rebuilt when the notebook is re-run, so its
-figures go stale and nothing reports it. figtracer is the render step for that document.
+Figures and tables reach the note through a manifest. Each save appends one line recording the title, the notebook and chunk, and the git commit. The note embeds by title, and `figtracer figsync sync` replaces every embedded figure and table with its newest version and writes a provenance index beside the note.
+
+Figures are re-rendered from the notebook. `figtracer figrun` executes a notebook's figure chunks headlessly, by label, so a changed colour, threshold or axis label is drawn again without reopening the session. It runs chunk bodies verbatim, so it cannot draw anything the notebook does not define.
+
+Numbers in the note are checked against the outputs. `figtracer notecheck` reports every number in a note that no current chunk, saved table or ledger produced, and names the chunk that last produced it.
+
+It exists because the write-up usually lives in a different document from the analysis. A lab note, an Obsidian vault or a manuscript draft is not rebuilt when the notebook is re-run, so its figures go stale and its numbers drift, and nothing reports either. figtracer is the render step and the check for that document.
+
+![Lab notes that keep up: a Markdown note contains a current response plot, an updated table and a number matched to the current output, with the notebook, chunks and git commit recorded behind the saved results; a coding agent can render, sync and check this plain-text workflow](docs/figtracer-map.svg)
 
 ```bash
 uv tool install "git+https://github.com/david-priest/figtracer.git"
@@ -30,22 +33,14 @@ The [five-minute guide](docs/GETTING_STARTED.md) walks through the same loop, an
 
 ## How it works
 
-Every figure save, from R, Python or a file registered from another renderer, appends one line to
-`MANIFEST.jsonl` in the analysis's `outputs/` folder: the figure's title, size, source file,
-generator and the git commit at that moment. The manifest is append-only, so it also holds each
-figure's history.
+Every figure or table save, from R, Python or a file registered from another renderer, appends one line to `MANIFEST.jsonl` in the analysis's `outputs/` folder: the title, the notebook and chunk that made it, the git commit at that moment, and for a figure its size. The manifest is append-only, so it also holds each artefact's history. The contract is written down in [docs/MANIFEST.md](docs/MANIFEST.md).
 
-A note embeds a figure by title. `figtracer figsync sync` resolves each embedded title to its
-newest render, rasterises it to a stable filename beside the note, and writes a provenance table
-listing the source and commit of every figure in the note. After the analysis is re-run, the same
-command brings the note up to date without touching its prose. Everything involved is plain text
-in git.
+A note embeds a figure by title. `figtracer figsync sync` resolves each embedded title to its newest render, rasterises it to a stable filename beside the note, regenerates every placed table from its CSV, and writes a provenance index listing the source and commit of everything in the note. After the analysis is re-run, the same command brings the note up to date without touching its prose, and `figsync drift` reports any embed whose attachment is older than the newest render.
 
-![figtracer maps out as two tiers: the figure loop you benefit from immediately, and an optional full experiment system on top](docs/figtracer-map.svg)
+Two commands run the loop in the other direction. `figrun` takes an edit to the notebook back to a render, and `notecheck` takes a number in the note back to the chunk that produced it.
 
-The figure loop is one function call in an analysis you already have. Experiment scaffolding, a project
-dashboard and the end-of-session `sync` are a separate layer on top,
-described below, and the loop does not depend on them.
+
+The figure loop is one function call in an analysis you already have. `figrun` and `notecheck` need an experiment the registry knows about, since they resolve the notebook and the outputs through the experiment's note. Experiment scaffolding, a project dashboard and the end-of-session `sync` are a separate layer on top, described below.
 
 ## The figure loop
 
@@ -72,11 +67,14 @@ figtracer fig register method_flow.svg --title fixation_method_flow \
 
 The figure is then in the manifest, and the note can follow its latest render:
 
-- `figtracer fig embed <spec.yaml>` — compose panels into a figure and write it into a note
-  (with a provenance table); `figtracer fig watch` keeps it live.
-- `figtracer figsync sync` — keep single note figures in sync with the newest export.
-- `figtracer fig doctor` — integrity-check the manifest so a title never resolves to a stale or
-  missing figure.
+- `figtracer figsync place <title> --note <note> -y` — write the embed into a note, in Markdown,
+  HTML or Obsidian wikilink form.
+- `figtracer figsync sync` — rasterise the newest render of every embedded title to its stable
+  attachment, and rewrite the provenance index.
+- `figtracer figsync drift` — report embeds that are stale, not yet materialised, or have no
+  registered source.
+- `figtracer fig embed <spec.yaml>` — compose panels into a multipanel figure and write it into a
+  note; `figtracer fig watch` keeps it live. `figtracer fig doctor` integrity-checks the manifest.
 
 Embeds are standard Markdown or HTML by default, so they render anywhere. `--link-style obsidian`
 writes Obsidian wikilinks instead, which carry the native resize handle. A Python analysis
@@ -86,47 +84,26 @@ are intentionally isolated.
 [`examples/cytof`](examples/cytof) runs the loop on two public CyTOF datasets, one analysed in R
 with `seekit` and one in Python with `scanpy`, and places figures from both in one lab note.
 
-## The full experiment system (optional)
+## Re-rendering from the notebook
 
-figtracer can also scaffold experiments, maintain a project dashboard
-and close out a session. None of this is needed for the demo or the figure loop.
+Change an axis label, a threshold or a colour, and the figure has to be made again. `figrun` does that from the command line, from the `.qmd` itself.
 
-```text
-figtracer new       scaffold a fully cross-linked experiment: notes + data/analysis/outputs dirs
-figtracer index     rebuild a project's Mission Control dashboard (every experiment by status)
-figtracer figrun    re-render a notebook's figure chunks headlessly, from the .qmd itself
-figtracer data      a content-addressed registry of analysis objects (.qs2/.rds/.RData)
-figtracer doctor    profile-aware QMD checks for internal, collaborator, and publication views
-figtracer sync      end-of-session roundup: figures -> note -> dashboard -> git commit
-figtracer export    a clean collaborator-facing PDF of an experiment's notes
-```
-
-### Re-rendering figures without reopening the notebook
-
-Change an axis label, a threshold or a colour, and the figure has to be made again. `figrun` does
-that from the command line:
+![A blue response plot is redrawn in orange after a notebook edit: figrun loads the saved analysis, runs prerequisites and the selected plot chunk, skips configured expensive chunks and verifies the new render; figsync then replaces the note's embedded figure in place, without reopening the analysis session](docs/figtracer-figrun.svg)
 
 ```bash
-figtracer figrun --exp EXP01 --list          # what the notebook contains, and how each chunk is classified
+figtracer figrun --exp EXP01 --list          # what the notebook holds, and how each chunk is classified
 figtracer figrun --exp EXP01 umap-by-group   # re-render named chunks
-figtracer figrun --exp EXP01 --changed       # every render older than the notebook's last edit
-figtracer figrun --exp EXP01 --awaiting      # flagged embed=TRUE, but no render on record
+figtracer figrun --exp EXP01 --changed       # every figure chunk whose newest render predates the notebook's last edit
+figtracer figrun --exp EXP01 --awaiting      # figure chunks flagged for a note that have no render on record
 ```
 
-It executes chunk bodies taken verbatim from the `.qmd`, by label, so it cannot draw anything that
-is not already in the notebook. The notebook remains the definition of what the figure is, and
-`figrun` only runs it. Prerequisites are worked out by dataflow analysis of the parse tree, so
-there is no chunk graph to maintain by hand.
+It executes chunk bodies taken verbatim from the `.qmd`, by label, so it cannot draw anything that is not already in the notebook. The notebook remains the definition of what the figure is, and `figrun` only runs it. Prerequisites are worked out by dataflow analysis of the parse tree, so there is no chunk graph to maintain by hand, and figure calls in prerequisite chunks are muted, so nothing re-renders by accident.
 
-Chunks that rebuild the analysis object itself, such as clustering, embedding, merging and saving
-the checkpoint, are skipped unless you name them. Re-running those invalidates every figure drawn
-at a level applied afterwards, and can destroy state that no chunk can reproduce, such as gates
-drawn by hand in an interactive app.
+Chunks that rebuild the analysis object itself, such as clustering, embedding, merging and saving the checkpoint, are skipped unless you name them. Re-running those invalidates every figure drawn at a level applied afterwards, and can destroy state that no chunk can reproduce, such as gates drawn by hand in an interactive app. The chunk that reloads the saved object is run even when the notebook marks it `eval: false`, because headlessly it is the only source of the object.
 
-`figrun` is R-only for now. The R side needs `jsonlite`, `codetools`, `here` and `knitr`. Which
-calls count as "rebuilds the object" or "reloads the checkpoint", and how R is launched, are set
-in an optional `figrun:` block of `~/.config/labkit/config.yaml`; the defaults are one lab's
-idioms (`cluster2`, `qs_save`, `qs_read`, …) and yours will differ:
+Each render is verified before success is reported: the new manifest line must sit under this experiment's `outputs/`, point at this notebook, carry the chunk label, and refer to a file that is not a blank device. The chunk label is stamped into the manifest line, which is what makes `--changed` exact for figures whose titles are built at run time.
+
+`figrun` is R-only for now, and resolves the notebook through the experiment's note (`--qmd` picks among several). The R side needs `jsonlite`, `codetools`, `here` and `knitr`. Which calls count as "rebuilds the object" or "reloads the checkpoint", and how R is launched, are set in an optional `figrun:` block of `~/.config/labkit/config.yaml`; the defaults are one lab's idioms (`cluster2`, `qs_save`, `qs_read`, …) and yours will differ:
 
 ```yaml
 figrun:
@@ -135,7 +112,38 @@ figrun:
   reload_calls: [readRDS]
 ```
 
-Follow the [full experiment-system setup](docs/FULL_SYSTEM.md) when you want that layer.
+## Numbers and tables
+
+A figure in a note has a manifest line behind it. A number typed into the prose, or a table typed in by hand, has nothing, and it is the number that goes wrong: a value copied from an earlier run, a confidence bound hand-computed and off by one unit, two table rows transposed. `notecheck` and `saveTable()` close that gap.
+
+A table is saved like a figure and becomes a first-class artefact. `saveTable(df, "cluster_medians")` in R or `savetable(df, "cluster_medians")` in Python writes `outputs/cluster_medians.csv`, overwritten in place, and a manifest line with `kind: table`. `figtracer figsync place cluster_medians --table --note <note> -y` writes the table into the note between markers, and `figsync sync` regenerates the block whenever the CSV changes, leaving the prose around it alone.
+
+`figtracer notecheck --exp EXP01` then checks every number in the experiment's notes against what the analysis currently produces: the saved tables, each chunk's console output from the newest run that ran it, and the experiment's protocol and run ledgers. A number nothing current produced is reported as unsourced; one that an earlier run produced and the current one does not is reported as stale, with the run that last produced it. Years, identifiers such as PMIDs and catalogue numbers, a note's dated `# Log` and planning notes are exempt. `figtracer sync` runs the check before it commits and stops on findings.
+
+```bash
+figtracer notecheck --exp EXP01                 # report
+figtracer notecheck --exp EXP01 --where 0.954   # which chunk, table or ledger produced this value
+figtracer notecheck --exp EXP01 --json --attribute   # every sourced number with its source, for an agent or CI
+```
+
+The console corpus reads an append-only R session log in the format `seekit`'s `start_session_log()` writes, one block per run with a marker per chunk; `figrun` writes those markers, and a knit does too.
+
+## The full experiment system (optional)
+
+figtracer can also scaffold experiments, track the acquisitions inside one, maintain a project dashboard and close out a session. None of this is needed for the demo or the figure loop.
+
+```text
+figtracer new       scaffold a fully cross-linked experiment: note + protocol/data/analysis/outputs dirs
+figtracer run       one acquisition inside an experiment: run.yaml ledger + a Runs table in the note
+figtracer index     rebuild a project's Mission Control dashboard (every experiment by status)
+figtracer data      a content-addressed registry of analysis objects (.qs2/.rds/.RData)
+figtracer doctor    profile-aware QMD checks for internal, collaborator, and publication views
+figtracer sync      end-of-session roundup: figures and tables -> note -> notecheck -> dashboard -> git commit
+figtracer export    a clean collaborator-facing PDF of an experiment's notes
+```
+
+Follow the [full experiment-system setup](docs/FULL_SYSTEM.md) when you want that layer, and
+[docs/RUNS.md](docs/RUNS.md) for experiments with more than one acquisition.
 Bench protocols moved to a separate repository, protokit, on 2026-09-02; `figtracer protocol`
 forwards to it for one release.
 `labkit` (scaffolding + Mission Control) and `figtools` (figure assembly) also ship as standalone
@@ -152,6 +160,7 @@ figtracer is a good fit when:
 - analysis happens in R or Python and figures change as the code changes;
 - the durable record should be readable Markdown, YAML, SVG, and JSONL in git;
 - figures from multiple scripts or languages need to converge on one note;
+- the numbers quoted in a note need to be traceable to the run that produced them;
 - you want to add provenance without moving the analysis into a new notebook platform; or
 - stale pasted figures and unclear source files are the recurring problem to solve.
 
@@ -201,7 +210,7 @@ pytest
 ## Layout
 
 ```text
-figtracer/      umbrella package (CLI, sync, savefig, data, export)
+figtracer/      umbrella package (CLI, figsync, figrun, notecheck, sync, savefig, savetable, data, export)
 labkit/         experiment scaffolding + Mission Control + ingest (+ templates, config)
 figtools/       figure assembly, embed, and integrity checks
 r/              dependency-free R saveFig() shim

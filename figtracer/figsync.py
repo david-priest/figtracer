@@ -51,9 +51,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 from figtools import links as _links
 from labkit import config as lkconfig
+from figtracer import manifest as _manifest
 from figtracer.sync import resolve
 
 
@@ -65,7 +67,7 @@ def _link_style_default() -> str:
 
 
 def _key(e):
-    return e.get("saved_at") or e.get("timestamp") or ""
+    return _manifest.saved_at_key(e)
 
 
 def _manifests(analysis_dir: str, walk_up: bool = True) -> list[str]:
@@ -148,6 +150,9 @@ def resolve_figures(analysis_dir: str, committed_only: bool = False,
     for (ch, t), vs in versions.items():
         if ch != channel:
             continue
+        vs = [e for e in vs if _manifest.kind(e) == _manifest.FIGURE]
+        if not vs:
+            continue
         vs.sort(key=_key, reverse=True)
         pool = [e for e in vs if e.get("git_commit")] if committed_only else vs
         if not pool:
@@ -163,6 +168,120 @@ def resolve_figures(analysis_dir: str, committed_only: bool = False,
         chosen["_n"] = len(vs)
         out[t] = chosen
     return out
+
+
+# ── tables ───────────────────────────────────────────────────────────────────
+# A table is a first-class artefact (docs/MANIFEST.md): `saveTable()` writes
+# `outputs/<title>.csv` at the root, overwritten in place, and a MANIFEST line with
+# `kind: table`. In a note it lives between markers, like the Runs table, so the prose
+# around it survives every sync and `sync` rewrites only what sits inside them.
+TABLE_ROWS_SHOWN = 50
+
+
+def resolve_tables(analysis_dir: str, walk_up: bool = True, channel: str = "note") -> dict:
+    """{title: newest table entry}, with `_path` and `_missing` set the way figures are."""
+    versions = _load_versions(analysis_dir, walk_up)
+    out = {}
+    for (ch, t), vs in versions.items():
+        if ch != channel:
+            continue
+        vs = [e for e in vs if _manifest.kind(e) == _manifest.TABLE]
+        if not vs:
+            continue
+        vs.sort(key=_key, reverse=True)
+        chosen = dict(vs[0])
+        chosen["_missing"] = not os.path.exists(chosen["_path"])
+        chosen["_n"] = len(vs)
+        out[t] = chosen
+    return out
+
+
+def _table_markers(eid: str, title: str) -> tuple[str, str]:
+    return (f"<!-- figtracer:table {eid}:{title}:begin -->",
+            f"<!-- figtracer:table {eid}:{title}:end -->")
+
+
+_TABLE_BLOCK = re.compile(
+    r"<!-- figtracer:table (?P<eid>[^:\s]+):(?P<title>[^:\s]+):begin -->\n?(?P<body>.*?)"
+    r"\n?<!-- figtracer:table (?P=eid):(?P=title):end -->", re.S)
+
+
+def _note_tables(eid: str, notes: list[str]) -> dict:
+    """{title: [note basenames]} for every table block of this experiment in these notes."""
+    ref: dict[str, list] = {}
+    for n in notes:
+        with open(n, encoding="utf-8") as f:
+            for m in _TABLE_BLOCK.finditer(f.read()):
+                if m.group("eid") == eid:
+                    ref.setdefault(m.group("title"), []).append(os.path.basename(n))
+    return ref
+
+
+def _table_body(csv_path: str, max_rows: int = TABLE_ROWS_SHOWN) -> str:
+    """The CSV as a markdown table, cells verbatim (the writer already rounded), pipes
+    escaped, capped at `max_rows` with a line saying where the rest is."""
+    import csv as _csv
+    with open(csv_path, encoding="utf-8", newline="") as f:
+        rows = list(_csv.reader(f))
+    if not rows:
+        return "_(empty table)_"
+    esc = lambda c: c.replace("|", "\\|").strip()  # noqa: E731
+    head, data = rows[0], rows[1:]
+    lines = ["| " + " | ".join(esc(c) for c in head) + " |",
+             "| " + " | ".join("---" for _ in head) + " |"]
+    for r in data[:max_rows]:
+        r = list(r) + [""] * (len(head) - len(r))
+        lines.append("| " + " | ".join(esc(c) for c in r[:len(head)]) + " |")
+    if len(data) > max_rows:
+        lines.append(f"_… {len(data) - max_rows} more row(s); the full table is "
+                     f"`outputs/{os.path.basename(csv_path)}`_")
+    return "\n".join(lines)
+
+
+def _upsert_table(text: str, eid: str, title: str, body: str) -> tuple[str, bool]:
+    """Replace the block for (eid, title) in `text`, or insert it before `# Log`.
+    Returns (new text, changed)."""
+    begin, end = _table_markers(eid, title)
+    block = f"{begin}\n{body}\n{end}"
+    if begin in text and end in text:
+        pre, rest = text.split(begin, 1)
+        old, post = rest.split(end, 1)
+        if old.strip("\n") == body:
+            return text, False
+        return pre + block + post, True
+    insert = "\n" + block + "\n"
+    i = text.find("\n# Log")
+    new = (text[:i] + insert + text[i:]) if i != -1 else (text.rstrip("\n") + "\n" + insert)
+    return new, True
+
+
+def materialize_tables(tables: dict, eid: str, notes: list[str], execute: bool = False,
+                       max_rows: int = TABLE_ROWS_SHOWN) -> dict:
+    """Rewrite every placed table block whose content differs from the current CSV.
+    Returns {"synced", "current", "missing", "unplaced"}; prints nothing."""
+    ref = _note_tables(eid, notes)
+    synced, current, missing = [], [], []
+    for t in sorted(ref):
+        e = tables.get(t)
+        if e is None or e.get("_missing"):
+            missing.append(t)
+            continue
+        body = _table_body(e["_path"], max_rows)
+        changed_any = False
+        for n in notes:
+            if os.path.basename(n) not in ref[t]:
+                continue
+            with open(n, encoding="utf-8") as f:
+                text = f.read()
+            new, changed = _upsert_table(text, eid, t, body)
+            if changed:
+                changed_any = True
+                if execute:
+                    with open(n, "w", encoding="utf-8") as f:
+                        f.write(new)
+        (synced if changed_any else current).append(t)
+    unplaced = sorted(t for t, e in tables.items() if e.get("embed") and t not in ref)
+    return {"synced": synced, "current": current, "missing": missing, "unplaced": unplaced}
 
 
 def _exp_paths(args):
@@ -302,23 +421,33 @@ UNPLACED_SHOWN = 15
 
 
 def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
-              attach: str | None = None, show_all: bool = False) -> None:
+              attach: str | None = None, show_all: bool = False,
+              tables: dict | None = None) -> None:
     ref = _note_embeds(eid, notes)
     titles = set(figs)
     embed_titles = {t for t, e in figs.items() if e.get("embed")}
-    awaiting = orphan = not_mat = 0
+    awaiting = orphan = not_mat = stale = 0
     print("== note embeds -> figure ==")
     for slug in sorted(ref):
         where = ", ".join(sorted(set(ref[slug])))
         if slug in titles:
+            png = os.path.join(attach, _attachment_name(eid, slug, "note")) if attach else None
             if figs[slug].get("_missing"):
                 tag = "DANGLING (title ok, no on-disk render)"
-            elif attach is not None and not os.path.exists(
-                    os.path.join(attach, _attachment_name(eid, slug, "note"))):
+            elif png is not None and not os.path.exists(png):
                 # Resolvable but the attachment PNG isn't on disk: sync has not run
                 # or rasterization failed. Must NOT read "ok".
                 tag = "NOT MATERIALISED (run figsync sync)"
                 not_mat += 1
+            elif png is not None and not _is_current(png, figs[slug]["_path"]):
+                # The PNG exists but predates the newest render. This used to read "ok":
+                # after a re-run the note and the merge canvas showed a clustering one
+                # run out of date while drift said every figure was in sync — the one
+                # command whose job is to say so, saying yes while they were behind.
+                # `_is_current` is the same test `sync` uses to decide what to rewrite.
+                tag = (f"STALE (attachment older than the newest render, "
+                       f"{figs[slug].get('saved_at', '')[:16]} — run figsync sync)")
+                stale += 1
             else:
                 tag = "ok"
         elif slug in qmd_titles:
@@ -328,6 +457,31 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
             tag = "ORPHAN (no registered source — register it, or fix embed/rename)"
             orphan += 1
         print(f"  [{tag}]  {slug}  ({where})")
+    if tables is not None:
+        tref = _note_tables(eid, notes)
+        print("\n== note table blocks -> table ==")
+        for t in sorted(tref):
+            where = ", ".join(sorted(set(tref[t])))
+            e = tables.get(t)
+            if e is None:
+                tag = "ORPHAN TABLE (no MANIFEST table entry — saveTable() it, or remove the block)"
+                orphan += 1
+            elif e.get("_missing"):
+                tag = "DANGLING TABLE (entry ok, CSV missing)"
+            else:
+                body = _table_body(e["_path"])
+                fresh = all(_upsert_table(open(n, encoding="utf-8").read(), eid, t, body)[1] is False
+                            for n in notes if os.path.basename(n) in tref[t])
+                if fresh:
+                    tag = "ok"
+                else:
+                    tag = "STALE TABLE (block differs from the current CSV — run figsync sync)"
+                    stale += 1
+            print(f"  [{tag}]  {t}  ({where})")
+        unplaced_t = sorted(t for t, e in tables.items() if e.get("embed") and t not in tref)
+        if unplaced_t:
+            print(f"  unplaced tables ({len(unplaced_t)}): "
+                  f"{', '.join(unplaced_t[:UNPLACED_SHOWN])}")
     unplaced = sorted(embed_titles - set(ref))
     print(f"\n== embed=TRUE figures (in MANIFEST) not placed in any note ({len(unplaced)}) ==")
     # A notebook that loops f2() over conditions leaves hundreds of embed=TRUE titles
@@ -338,7 +492,7 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
         print(f"  UNPLACED  {t}")
     if len(shown) < len(unplaced):
         print(f"  … and {len(unplaced) - len(shown)} more (pass --all to list them)")
-    print(f"\nsummary: {len(ref)} embeds — {awaiting} awaiting re-run, "
+    print(f"\nsummary: {len(ref)} embeds — {stale} STALE (run sync), {awaiting} awaiting re-run, "
           f"{not_mat} not materialised (run sync), "
           f"{orphan} orphaned (no registered source), {len(unplaced)} unplaced")
 
@@ -367,8 +521,10 @@ def _rasterize(src: str, dst: str, dpi: int = 300) -> None:
     subprocess.run(["pdftoppm", "-r", str(dpi), "-png", "-singlefile", src, stem], check=True)
 
 
-def _write_provenance(eid: str, note_dir: str, mat: dict, ref: dict | None = None) -> str:
+def _write_provenance(eid: str, note_dir: str, mat: dict, ref: dict | None = None,
+                      tables: dict | None = None, tref: dict | None = None) -> str:
     ref = ref or {}
+    tables, tref = tables or {}, tref or {}
     out = os.path.join(note_dir, f"{eid} — Figure provenance (auto).md")
     # `title:` so Obsidian front-matter-title plugins show a readable name in the explorer
     # instead of the raw filename. Deliberately NO `experiment_id` — that key is what marks a
@@ -391,6 +547,17 @@ def _write_provenance(eid: str, note_dir: str, mat: dict, ref: dict | None = Non
         lines.append(f"| `{eid}_{t}.png` | {where} | {e.get('saved_at', '')} | "
                      f"`{e.get('git_commit') or '-'}` | {source} | `{generator}` | "
                      f"{os.path.basename(e.get('_path', ''))} |")
+    if tables:
+        lines += ["", "## Tables", "",
+                  "| table | embedded in | written | git commit | notebook | chunk | rows |",
+                  "| --- | --- | --- | --- | --- | --- | --- |"]
+        for t in sorted(tables):
+            e = tables[t]
+            where = ", ".join(f"[[{os.path.splitext(n)[0]}]]" for n in sorted(set(tref.get(t, [])))) or "—"
+            lines.append(f"| `outputs/{os.path.basename(e.get('_path', ''))}` | {where} | "
+                         f"{e.get('saved_at', '')} | `{e.get('git_commit') or '-'}` | "
+                         f"{e.get('qmd_path') or '—'} | `{e.get('chunk_label') or '-'}` | "
+                         f"{e.get('n_rows', '—')} |")
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return out
@@ -407,7 +574,7 @@ def _is_current(attachment: str, render: str) -> bool:
 
 
 def materialize(figs, eid, note_dir, attach, notes, dpi=300, execute=False,
-                channel="note", force=False) -> dict:
+                channel="note", force=False, tables=None, tref=None) -> dict:
     """Core sync step (reusable by `figtracer sync`). Rasterizes the latest render
     of each figure that is BOTH embed=TRUE AND referenced in a note, overwriting
     the stable attachment PNG (`<eid>_<title>.png` for the note channel), and
@@ -445,13 +612,32 @@ def materialize(figs, eid, note_dir, attach, notes, dpi=300, execute=False,
         synced.append(t)
     # write provenance whenever there are targets (so it never goes stale), even
     # if some skipped — it reflects what's actually materialized right now.
-    prov = _write_provenance(eid, note_dir, mat, ref) if (targets and execute) else None
+    prov = (_write_provenance(eid, note_dir, mat, ref, tables, tref)
+            if ((targets or tables) and execute) else None)
     return {"synced": synced, "current": current, "missing": missing, "failed": failed,
             "unplaced": unplaced, "provenance": prov}
 
 
-def cmd_sync(figs, eid, attach, note_dir, notes, dpi, execute, force=False) -> int:
-    r = materialize(figs, eid, note_dir, attach, notes, dpi, execute, force=force)
+def cmd_sync(figs, eid, attach, note_dir, notes, dpi, execute, force=False,
+             tables: dict | None = None) -> int:
+    tr = placed = tref = None
+    if tables is not None:
+        tr = materialize_tables(tables, eid, notes, execute=execute)
+        tref = _note_tables(eid, notes)
+        placed = {t: tables[t] for t in tr["synced"] + tr["current"]}
+    r = materialize(figs, eid, note_dir, attach, notes, dpi, execute, force=force,
+                    tables=placed, tref=tref)
+    if tr is not None:
+        verb = "rewrote" if execute else "would rewrite"
+        for t in tr["synced"]:
+            print(f"  {verb} table block {t}  <- outputs/{os.path.basename(tables[t]['_path'])}")
+        if tr["current"]:
+            print(f"  {len(tr['current'])} table block(s) already current")
+        for t in tr["missing"]:
+            print(f"  SKIP table {t}: no MANIFEST table entry or its CSV is missing")
+        if tr["unplaced"]:
+            print(f"  note: {len(tr['unplaced'])} table(s) not placed in any note: "
+                  f"{', '.join(tr['unplaced'][:UNPLACED_SHOWN])}")
     print(f"{len(r['synced'])} figure(s) {'synced' if execute else 'to sync'} "
           f"(embed=TRUE and referenced in a note)"
           f"{'' if execute else '  [DRY RUN — pass -y to write]'}")
@@ -482,28 +668,49 @@ def cmd_place(args, eid, qmd, figs, notes) -> int:
     link-style, so the title<->filename<->embed contract is never hand-typed."""
     title = args.title
     if not title:
-        print("usage: figtracer figsync place <title> [--note <name>] [--width N] [--caption ...] [-y]")
+        print("usage: figtracer figsync place <title> [--table] [--note <name>] [--width N] [--caption ...] [-y]")
         return 2
-    known = _qmd_embed_titles(qmd) | set(figs)
-    block = _links.image_embed(f"{eid}_{title}.png", args.width,
-                               getattr(args, "link_style", None) or _link_style_default(), alt=title)
-    if args.caption:
-        block += f"\n_{args.caption}_"
-    if title not in known:
-        print(f"  ! warning: '{title}' is not a known embed=TRUE f2 title or MANIFEST figure.")
-        print(f"    known: {', '.join(sorted(known)) or '(none)'}\n")
+    tables = getattr(args, "_tables", None) or {}
+    if getattr(args, "table", False):
+        # A table block, not an image embed. Refused rather than warned when the title is
+        # unknown: an image embed for an unknown title is a placeholder that sync fills
+        # later; a table block for an unknown title has nothing it could ever be filled from.
+        e = tables.get(title)
+        if e is None or e.get("_missing"):
+            print(f"figsync place: '{title}' is not a MANIFEST table with its CSV on disk.\n"
+                  f"  known tables: {', '.join(sorted(t for t, x in tables.items() if not x.get('_missing'))) or '(none)'}",
+                  file=sys.stderr)
+            return 2
+        block = "{begin}\n{body}\n{end}".format(
+            begin=_table_markers(eid, title)[0], end=_table_markers(eid, title)[1],
+            body=_table_body(e["_path"]))
+        known = set(tables)
+    else:
+        known = _qmd_embed_titles(qmd) | set(figs)
+        block = _links.image_embed(f"{eid}_{title}.png", args.width,
+                                   getattr(args, "link_style", None) or _link_style_default(), alt=title)
+        if args.caption:
+            block += f"\n_{args.caption}_"
+        if title not in known:
+            print(f"  ! warning: '{title}' is not a known embed=TRUE f2 title or MANIFEST figure.")
+            print(f"    known: {', '.join(sorted(known)) or '(none)'}\n")
     print("embed block:\n  " + block.replace("\n", "\n  ") + "\n")
     if not args.note:
         print("(no --note: copy the block above, or pass --note <name> -y to insert it)")
         return 0
     cands = [n for n in notes if args.note in os.path.basename(n)]
     if len(cands) != 1:
-        print(f"--note '{args.note}' matched {len(cands)}: "
-              f"{[os.path.basename(c) for c in cands]}")
+        # Say what to do. Run in a loop over several figures, a bare "matched 2" line
+        # scrolls past and reads like progress while nothing was placed.
+        names = [os.path.basename(c) for c in cands]
+        print(f"figsync place: --note '{args.note}' matched {len(cands)} note(s): {names}\n"
+              f"  Pass the full basename, e.g. --note '{names[0] if names else args.note + '.md'}'.",
+              file=sys.stderr)
         return 2
     note = cands[0]
-    if title in _note_embeds(eid, [note]):
-        print(f"'{title}' already embedded in {os.path.basename(note)} — nothing to do.")
+    already = _note_tables(eid, [note]) if getattr(args, "table", False) else _note_embeds(eid, [note])
+    if title in already:
+        print(f"'{title}' already placed in {os.path.basename(note)} — nothing to do.")
         return 0
     if not args.yes:
         print(f"(dry run) would insert into {os.path.basename(note)} — pass -y to write.")
@@ -688,6 +895,9 @@ def main(argv=None) -> int:
     ap.add_argument("--committed-only", action="store_true",
                     help="resolve 'latest' to the newest git-committed render (reproducible)")
     ap.add_argument("--note", help="place: note (basename substring) to insert the embed into")
+    ap.add_argument("--table", action="store_true",
+                    help="place: the title is a TABLE (saveTable / savetable); insert its markdown "
+                         "between markers instead of an image embed")
     ap.add_argument("--width", type=int, default=720, help="place: embed width (default 720)")
     ap.add_argument("--link-style", choices=["markdown", "html", "obsidian"], default=None,
                     help="place: embed syntax (default from labkit config `link_style`, else html). "
@@ -713,22 +923,32 @@ def main(argv=None) -> int:
 
     eid, data_dir, note_dir, attach, notes, qmd, walk_up = _paths(args)
     figs = resolve_figures(data_dir, committed_only=args.committed_only, walk_up=walk_up)
+    tables = resolve_tables(data_dir, walk_up=walk_up)
     scope = "project" if args.project else "experiment"
-    print(f"{scope} {eid} — {len(figs)} figure title(s) in MANIFEST(s); {len(notes)} note(s)\n")
+    print(f"{scope} {eid} — {len(figs)} figure title(s), {len(tables)} table(s) in MANIFEST(s); "
+          f"{len(notes)} note(s)\n")
 
     if args.action == "index":
         cmd_index(figs)
+        for t in sorted(tables):
+            e = tables[t]
+            print(f"{e.get('saved_at', ''):26} TABLE v{e['_n']:<2} "
+                  f"{(e.get('git_commit') or '-')[:8]:8} {t}"
+                  f"{'  (NO on-disk CSV)' if e.get('_missing') else ''}")
         return 0
     if args.action == "drift":
-        cmd_drift(figs, eid, notes, _qmd_embed_titles(qmd), attach, show_all=args.show_all)
+        cmd_drift(figs, eid, notes, _qmd_embed_titles(qmd), attach, show_all=args.show_all,
+                  tables=tables)
         return 0
     if args.action == "place":
+        args._tables = tables
         return cmd_place(args, eid, qmd, figs, notes)
     if args.action == "register":
         return cmd_register(args, eid, data_dir, figs, walk_up)
     if args.action == "prune":
         return cmd_prune(data_dir, args.keep, args.yes, walk_up)
-    return cmd_sync(figs, eid, attach, note_dir, notes, args.dpi, args.yes, force=args.force)
+    return cmd_sync(figs, eid, attach, note_dir, notes, args.dpi, args.yes, force=args.force,
+                    tables=tables)
 
 
 if __name__ == "__main__":
