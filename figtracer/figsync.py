@@ -836,12 +836,26 @@ def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False,
     entries). Returns a summary; moves files to Trash only when execute=True.
 
     Guard: the newest rasterizable (svg/pdf/png) render of a channel is NEVER
-    trashed, even if it sorts beyond `keep`."""
+    trashed, even if it sorts beyond `keep`.
+
+    A render is a FILE, not a MANIFEST line. A table from saveTable()/savetable()
+    is one CSV overwritten in place, with a line appended on every save, so its
+    N lines all name the same path: that is one render, and there is nothing to
+    prune. Counting lines instead trashed the only (current) copy of every table
+    saved more than once. So entries are de-duplicated by path before `keep` is
+    applied, and no file a surviving render uses is ever dropped."""
     versions = _load_versions(analysis_dir, walk_up)
     drop, per_title = [], []
     for (ch, t), vs in versions.items():
         on_disk = [e for e in vs if os.path.exists(e["_path"])]
         on_disk.sort(key=_key, reverse=True)
+        seen, renders = set(), []
+        for e in on_disk:                       # newest line wins for a shared path
+            rp = os.path.realpath(e["_path"])
+            if rp not in seen:
+                seen.add(rp)
+                renders.append(e)
+        on_disk = renders
         losers = on_disk[keep:]
         # never let the newest rasterizable render fall into losers
         newest_raster = next((e for e in on_disk if _rasterizable(e)), None)
@@ -849,10 +863,14 @@ def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False,
             losers = [e for e in losers if e is not newest_raster]
         if not losers:
             continue
+        survivors = [e for e in on_disk if not any(e is x for x in losers)]
+        protected = {os.path.realpath(p) for e in survivors for p in _render_siblings(e["_path"])}
         files = []
         for e in losers:
             files += _render_siblings(e["_path"])
-        files = sorted(set(files))
+        files = sorted({p for p in files if os.path.realpath(p) not in protected})
+        if not files:
+            continue
         label = t if ch == "note" else f"{ch}:{t}"
         per_title.append({"title": label, "kept": len(on_disk) - len(losers),
                           "dropped": len(losers), "files": files})
