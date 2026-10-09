@@ -49,8 +49,4 @@ Please don't bundle unrelated refactors into a feature PR — they make review h
 ## Reporting security issues
 
 Please do not open a public issue for a security-sensitive report; contact the maintainer
-directly (see `CODE_OF_CONDUCT.md` for the contact address).
-
-## Code of conduct
-
-By participating you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md).
+directly at davidpriest@cider.osaka-u.ac.jp.
