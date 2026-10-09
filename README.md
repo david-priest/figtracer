@@ -33,7 +33,7 @@ Numbers in the note are checked against the outputs. `figtracer notecheck` repor
 
 It exists because the write-up usually lives in a different document from the analysis. A lab note, an Obsidian vault or a manuscript draft is not rebuilt when the notebook is re-run, so its figures go stale and its numbers drift, and nothing reports either. figtracer is the render step and the check for that document.
 
-![Lab notes that keep up: a Markdown note contains a current response plot, an updated table and a number matched to the current output, with the notebook, chunks and git commit recorded behind the saved results; a coding agent can render, sync and check this plain-text workflow](docs/figtracer-map.svg)
+![figtracer workflow: R or Python analysis saves figures and tables with a source record; sync updates them in a Markdown or Obsidian lab note. Results remain traceable to the notebook, chunk and git commit. A person defines the analysis, and an agent can render, sync and check it.](docs/figtracer-map.svg)
 
 ```bash
 uv tool install "git+https://github.com/david-priest/figtracer.git"
