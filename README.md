@@ -1,8 +1,27 @@
-# figtracer
+<h1 align="center">
+  <img src="docs/assets/figtracer-logo.png" alt="figtracer" width="320">
+</h1>
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21288980.svg)](https://doi.org/10.5281/zenodo.21288980)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/david-priest/figtracer/actions/workflows/ci.yml/badge.svg)](https://github.com/david-priest/figtracer/actions/workflows/ci.yml)
+<p align="center"><b>Keep your lab notes in step with your analysis.</b></p>
+
+<p align="center">Sync figures and tables from R or Python into Markdown notes, trace them to their source, and check the numbers in your write-up.</p>
+
+<p align="center">
+  <a href="https://doi.org/10.5281/zenodo.21288980"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21288980.svg" alt="DOI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-08264c" alt="License: MIT"></a>
+  <a href="https://github.com/david-priest/figtracer/actions/workflows/ci.yml"><img src="https://github.com/david-priest/figtracer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="#the-figure-loop"><img src="https://img.shields.io/badge/analysis-R_%C2%B7_Python-08264c" alt="Analysis in R and Python"></a>
+  <a href="#how-it-works"><img src="https://img.shields.io/badge/notes-Markdown_%C2%B7_Obsidian-08264c" alt="Markdown and Obsidian notes"></a>
+  <a href="#optional-let-a-coding-agent-operate-it"><img src="https://img.shields.io/badge/coding_agents-supported-08264c" alt="Coding agents supported"></a>
+</p>
+
+<p align="center">
+  <a href="docs/GETTING_STARTED.md"><img src="https://img.shields.io/badge/Try_the_demo-five--minute_guide_%E2%86%92-0866ff?style=for-the-badge&amp;labelColor=0866ff" alt="Try the demo: five-minute guide"></a>
+</p>
+
+<p align="center">
+  <a href="docs/GETTING_STARTED.md"><b>Get started</b></a> · <a href="#how-it-works">How it works</a> · <a href="#optional-let-a-coding-agent-operate-it">Use with a coding agent</a>
+</p>
 
 figtracer keeps a Markdown lab note in step with the R or Python analysis behind it. It does three things.
 
