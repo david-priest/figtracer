@@ -7,7 +7,7 @@
 <p align="center">Sync figures and tables from R or Python into Markdown notes, trace them to their source, and check the numbers in your write-up.</p>
 
 <p align="center">
-  <a href="https://doi.org/10.5281/zenodo.21288980"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21288980.svg" alt="DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.21288980"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21288980-08264c" alt="DOI: 10.5281/zenodo.21288980"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-08264c" alt="License: MIT"></a>
   <a href="https://github.com/david-priest/figtracer/actions/workflows/ci.yml"><img src="https://github.com/david-priest/figtracer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="#the-figure-loop"><img src="https://img.shields.io/badge/analysis-R_%C2%B7_Python-08264c" alt="Analysis in R and Python"></a>
