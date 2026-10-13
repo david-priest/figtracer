@@ -1,0 +1,1045 @@
+---
+title: "{{exp_id}} — {{title}}"
+analysis:
+  modality: "{{platform}}"
+  role: mixed
+  # Opt into collaborator/publication only after reviewing the derived view.
+  share: [internal]
+---
+
+TODO: one paragraph saying what was acquired and what question this notebook answers.
+
+The notebook runs in this order.
+
+1. Build one object from the FCS files, compensate it, and check the compensation.
+2. Count the events per sample.
+3. Cluster on the type markers and embed.
+4. Describe the clusters: numbers, heatmap, UMAP by cluster and by marker.
+5. Place the samples on the embedding and across the clusters.
+6. Name the clusters from the merge canvas.
+7. Repeat the figures on the merged labels.
+
+Steps 1 and 3 and the merge in step 6 change the object and are run in Positron, from the plans in the run plan beside this notebook (the Run Plan button). Each ends in a checkpoint; everything else only reads a checkpoint.
+
+Every constant marked `TODO` in `constants` is specific to this experiment and is set before the step that reads it. Those without a safe default stop the chunk that needs them until they are set.
+
+TODO: if this follows an earlier analysis, say which notebook each chunk was ported from, and what was not carried over and why.
+
+# Setup
+
+```{r}
+#| label: setup
+#| message: false
+# setwd() before here::i_am(): here caches the project root from the first call in a
+# session, and Positron shares one session across documents.
+#
+# The experiment id is defined once, as EXP_ID: every table title and the merge canvas name are
+# built from it. here::i_am() and claim_session() below keep it as a literal, the form those two
+# calls take in every notebook, so a rename has to correct them too; the message below lists
+# every place that carries the id.
+EXP_ID   <- "{{exp_id}}"
+EXP_ROOT <- "{{exp_root}}"
+if (!dir.exists(EXP_ROOT))
+  stop("EXP_ROOT does not exist: ", EXP_ROOT,
+       "\n  -> if the experiment was renamed or moved: in this notebook and its run plan the id ",
+       "or its path is written in",
+       "\n     EXP_ID, EXP_ROOT, here::i_am() and claim_session() in `setup`;",
+       "\n     CANVAS_DIR in `constants`; the title in the header;",
+       "\n     the file names of the notebook and of the run plan;",
+       "\n     and the `qmd` field inside the run plan.", call. = FALSE)
+if (!identical(normalizePath(getwd(), mustWork = FALSE),
+               normalizePath(EXP_ROOT, mustWork = FALSE))) setwd(EXP_ROOT)
+here::i_am("analysis/{{exp_id}}.qmd")
+
+suppressPackageStartupMessages({
+  library(SingleCellExperiment); library(SummarizedExperiment)
+  library(CATALYST); library(flowCore)
+  library(dplyr); library(ggplot2); library(ggrepel)
+  library(readxl); library(patchwork); library(ComplexHeatmap); library(qs2)
+})
+source("~/code/seekit/tools/reload_helpers.R")
+claim_session("{{exp_id}}.qmd"); start_session_log("session.log")
+
+my_seed <- 1234
+set.seed(my_seed)
+```
+
+# Constants
+
+Every input path, level and threshold the notebook uses is declared here once.
+
+```{r}
+#| label: constants
+#| message: false
+# --- inputs --------------------------------------------------------------------------------
+# A sheet is kept as <name>.csv or <name>.xlsx, and the notebook reads whichever is there.
+# find_sheet() returns the one that exists. It stops if both do, and if neither does unless
+# required = FALSE, when it returns NA. read_sheet() reads either format as a data frame (the
+# first sheet of a workbook), with white space trimmed from the column names and from every
+# character column, and an empty cell read as NA in both formats.
+find_sheet <- function(folder, name, required = TRUE) {
+  cand <- file.path(folder, paste0(name, c(".csv", ".xlsx")))
+  have <- cand[file.exists(cand)]
+  if (length(have) > 1)
+    stop("Both ", name, ".csv and ", name, ".xlsx are in ", folder,
+         "\n  -> keep one of them: the notebook reads exactly one.", call. = FALSE)
+  if (!length(have) && required)
+    stop("Neither ", name, ".csv nor ", name, ".xlsx is in ", folder, call. = FALSE)
+  if (length(have)) have else NA_character_
+}
+read_sheet <- function(file) {
+  d <- if (grepl("\\.csv$", file, ignore.case = TRUE)) {
+    utils::read.csv(file, check.names = FALSE, stringsAsFactors = FALSE)
+  } else {
+    as.data.frame(readxl::read_excel(file))
+  }
+  # A UTF-8 byte-order mark, which a spreadsheet program can write at the head of a .csv,
+  # would otherwise stay on the first column name.
+  names(d) <- trimws(sub("^\ufeff", "", names(d)))
+  d[] <- lapply(d, function(v) {
+    if (!is.character(v)) return(v)
+    v <- trimws(v)
+    v[!nzchar(v)] <- NA
+    v
+  })
+  d
+}
+
+# TODO: confirm each folder and sheet name. All are relative to the experiment root, through
+# here::here().
+FCS_DIR    <- here::here("data", "FCS")                       # the debarcoded files, one per sample
+PANEL_FILE <- find_sheet(here::here("analysis"), "panel")     # fcs_colname, antigen, marker_class
+MD_FILE    <- find_sheet(here::here("analysis"), "metadata")  # file_name, sample_id, SAMPLE_COL
+CKPT_COMP  <- here::here("analysis", "sce_compensated.qs2")   # after step 1
+CKPT       <- here::here("analysis", "sce_clustered.qs2")     # after step 3, and after the merge
+
+# The single-stained compensation beads, with their own panel and metadata sheets. `compensate`
+# gives both to prepData() with its default columns, so the bead metadata sheet needs file_name
+# (with the .fcs extension), sample_id, condition and patient_id, and the bead panel sheet needs
+# fcs_colname, antigen and marker_class.
+# TODO: point these at the bead acquisition this panel is compensated from.
+# Only the build reads the two bead sheets, so a missing one stops `load-fcs` and not this
+# chunk: the figure chunks do not depend on the compensation folder.
+COMP_DIR        <- here::here("data", "compensation")
+COMP_PANEL_FILE <- find_sheet(COMP_DIR, "panel", required = FALSE)
+COMP_MD_FILE    <- find_sheet(COMP_DIR, "metadata", required = FALSE)
+# TODO: the masses of the single-stained bead channels, as an integer vector. There is no safe
+# default: the build stops at the top of `load-fcs` while this is NULL.
+COMP_BC_MASSES  <- NULL
+
+COFACTOR <- 5          # arcsinh cofactor
+
+# --- samples ---------------------------------------------------------------------------------
+# The metadata column the by-sample figures and tables are split by. A level may hold one
+# sample or several.
+# TODO: `condition` is CATALYST's default. Name another column of the sheet, other than
+# sample_id, if the samples are told apart by something else.
+SAMPLE_COL <- "condition"
+# It is used as a column name beside the columns the tables and figures build, so it has to be
+# a syntactic R name and none of those.
+.built <- c("sample_id", "cluster_id", "cluster", "label", "pct", "pct_of_sample", "n_samples",
+            "Freq", "events", "pct_of_all_events", "x", "y")
+if (!(is.character(SAMPLE_COL) && length(SAMPLE_COL) == 1 && !is.na(SAMPLE_COL) &&
+      identical(make.names(SAMPLE_COL), SAMPLE_COL)) || SAMPLE_COL %in% .built)
+  stop("SAMPLE_COL must be one syntactic R name, and not a column this notebook builds (",
+       paste(.built, collapse = ", "), ").\n  it is: ",
+       paste(deparse(SAMPLE_COL), collapse = " "), call. = FALSE)
+# TODO: every metadata column to carry into the object as a factor. SAMPLE_COL is always one.
+MD_FACTORS <- unique(c(SAMPLE_COL))
+
+# Read here, not in the build, so that the figure chunks get the sample order and the palette
+# without the build. The levels of SAMPLE_COL keep the order in which the sheet first names
+# them.
+md <- read_sheet(MD_FILE)
+.need <- unique(c("file_name", "sample_id", SAMPLE_COL, MD_FACTORS))
+if (!all(.need %in% names(md)))
+  stop("The metadata sheet lacks a column this notebook reads: ",
+       paste(setdiff(.need, names(md)), collapse = ", "),
+       "\n  columns in the sheet: ", paste(names(md), collapse = ", "), call. = FALSE)
+stopifnot(
+  "sample_id is not unique in the metadata sheet" = !anyDuplicated(md$sample_id),
+  "file_name is not unique in the metadata sheet" =
+    !anyDuplicated(sub("\\.fcs$", "", md$file_name)),
+  "a sample has no value of SAMPLE_COL in the metadata sheet" = !anyNA(md[[SAMPLE_COL]]))
+SAMPLE_LEVELS <- unique(as.character(md[[SAMPLE_COL]]))
+
+# One colour per level of SAMPLE_COL, named, so that a level keeps its colour in every figure.
+if (length(SAMPLE_LEVELS) > length(.wl_cluster_cols))
+  stop("SAMPLE_COL '", SAMPLE_COL, "' has ", length(SAMPLE_LEVELS), " levels and the palette has ",
+       length(.wl_cluster_cols), " colours.\n  -> name a coarser column in SAMPLE_COL, or ",
+       "build SAMPLE_PAL from a longer palette.", call. = FALSE)
+SAMPLE_PAL <- setNames(.wl_cluster_cols[seq_along(SAMPLE_LEVELS)], SAMPLE_LEVELS)
+
+# --- markers ---------------------------------------------------------------------------------
+# The population this notebook clusters, for example "CD4" or "B cell". It prefixes every
+# figure title and names the merge canvas. A figure title is the identifier figsync embeds by,
+# so changing this after the first render orphans the embeds.
+# TODO: set it. There is no safe default: this chunk stops while it is NULL.
+LINEAGE <- NULL
+if (!(is.character(LINEAGE) && length(LINEAGE) == 1 && !is.na(LINEAGE) &&
+      nzchar(trimws(LINEAGE)) && grepl("^[A-Za-z0-9 _.+-]+$", LINEAGE)))
+  stop("TODO: set LINEAGE in `constants` to the population this notebook clusters.\n",
+       "  It becomes part of every figure file name and of the merge canvas name, so it may ",
+       "hold letters, digits, spaces and _ . + - only.\n  it is: ",
+       paste(deparse(LINEAGE), collapse = " "), call. = FALSE)
+
+# The SOM input, one marker per line, spelled as in the panel's antigen column (for example
+# CD3, CD4, CD45RA, CCR7).
+# TODO: replace the three placeholders. `type-markers` stops while a name here is not a marker
+# of the object, so the clustering cannot run on them.
+#
+# CHANGING THIS LIST MOVES THE PARTITION AT EVERY k: it changes the SOM input. Add or remove a
+# marker and the merge canvas must be rebuilt from scratch.
+TYPE_MARKERS <- scan(text = "
+TODO_marker_1
+TODO_marker_2
+TODO_marker_3
+", what = "", sep = "\n", quiet = TRUE)
+# One label for the clustering input, used by every caption that names it.
+TYPE_LAB <- sprintf("%d markers", length(TYPE_MARKERS))
+
+# The markers the UMAP is coloured by, one panel each.
+# TODO: the clustering markers by default; list the ones worth a panel.
+UMAP_MARKERS <- TYPE_MARKERS
+# Cells drawn in the UMAP by marker, a random sample of the embedded cells: it melts markers x cells.
+UMAP_MARKER_CELLS <- 100000
+
+# --- clustering ------------------------------------------------------------------------------
+# A CHANGE TO K_MAX MEANS THE MERGE CANVAS MUST BE REBUILT. K_MAX is the maxK of the consensus
+# metaclustering. Under the "km" consensus algorithm maxK changes the metaclustering at every k:
+# k-means draws random numbers inside the loop over k, so the partition at every level moves
+# with maxK, with an identical seed and identical input. CATALYST::cluster(), which `cluster`
+# calls, uses the hierarchical default, which has no such coupling. The canvas is rebuilt all
+# the same, so that the rule does not depend on which algorithm the clustering call uses.
+# Changing the type marker list moves the partition at every k under either algorithm, because
+# it changes the SOM input. Cluster ids are labels of convenience, not identities. Never "fix"
+# a surprise here by re-seeding; the seed is not the cause.
+# TODO: settle K_MAX and CLUS_K before the merge canvas is authored. CLUS_K is chosen after
+# looking at the heatmap at more than one level, and K_MAX leaves room above it for that:
+# every level up to K_MAX is in the saved object, so another level is read by changing CLUS_K
+# and running plan 2b, without clustering again.
+K_MAX  <- 30
+CLUS_K <- "meta20"                # the level the figures and the merge canvas read
+stopifnot("CLUS_K is not a level this K_MAX produces" =
+            CLUS_K %in% paste0("meta", 2:K_MAX))
+
+# Cells per sample given to the UMAP; NULL embeds every cell.
+# TODO: keep NULL unless the object is too large to embed whole. A number takes at most that
+# many cells from each sample, so samples of different size come out equal on the embedding and
+# it no longer shows them in proportion. Use NULL whenever a figure compares where the samples'
+# cells sit, or reads one sample against the whole. With a number, the cells left out have no
+# coordinate and are absent from every UMAP; the subtitles report how many were embedded.
+UMAP_CELLS <- NULL
+
+# The merge canvas: cluster id -> label, curated in Obsidian, read back here. Its name carries
+# the lineage but not the metaN, because the chosen resolution can change.
+# TODO: confirm CANVAS_DIR is the experiment's folder in the vault, beside the lab note.
+CANVAS_DIR   <- "{{note_dir}}"
+MERGE_CANVAS <- file.path(CANVAS_DIR,
+                          sprintf("%s — %s merging (advanced canvas).canvas", EXP_ID, LINEAGE))
+MERGE_CLI    <- "figtracer"       # read_merge_canvas() shells out to this
+MERGE_ID     <- "merging1"        # the clustering level the merge adds
+
+# --- helpers used from here down ---------------------------------------------------------------
+# Declared here, not beside their first use, so a figure chunk that needs one does not pull an
+# analysis chunk into a headless render.
+# The SAMPLE_COL level of every cell as a factor in sheet order, checked against the sheet.
+sample_factor <- function(sce) {
+  if (!SAMPLE_COL %in% colnames(colData(sce)))
+    stop("No colData column '", SAMPLE_COL, "' in this object.\n  available: ",
+         paste(colnames(colData(sce)), collapse = ", "), call. = FALSE)
+  f <- factor(as.character(colData(sce)[[SAMPLE_COL]]), levels = SAMPLE_LEVELS)
+  if (anyNA(f) || !setequal(as.character(unique(f)), SAMPLE_LEVELS))
+    stop("The object and the metadata sheet name different levels of ", SAMPLE_COL,
+         ".\n  in the object: ",
+         paste(sort(unique(as.character(colData(sce)[[SAMPLE_COL]]))), collapse = ", "),
+         "\n  in the sheet: ", paste(SAMPLE_LEVELS, collapse = ", "), call. = FALSE)
+  f
+}
+# Markers named in a constant that the object does not carry: stop and say which.
+need_markers <- function(sce, markers, what) {
+  miss <- setdiff(markers, rownames(sce))
+  if (length(miss))
+    stop(what, " names markers that are not in the object: ", paste(miss, collapse = ", "),
+         "\n  markers in the object: ", paste(rownames(sce), collapse = ", "), call. = FALSE)
+  invisible(markers)
+}
+# What `compensate` needs. Checked at the top of `load-fcs` as well, so that a missing input
+# stops the build before every FCS file has been read.
+need_compensation_inputs <- function() {
+  stopifnot(
+    "TODO: set COMP_BC_MASSES in `constants` to the masses stained on the beads" =
+      is.numeric(COMP_BC_MASSES) && length(COMP_BC_MASSES) > 0,
+    "the compensation folder COMP_DIR was not found" = dir.exists(COMP_DIR),
+    "no bead panel sheet (.csv or .xlsx) in COMP_DIR; COMP_PANEL_FILE is set when `constants` runs" =
+      file.exists(COMP_PANEL_FILE),
+    "no bead metadata sheet (.csv or .xlsx) in COMP_DIR; COMP_MD_FILE is set when `constants` runs" =
+      file.exists(COMP_MD_FILE))
+  invisible(TRUE)
+}
+```
+
+# 1. Build
+
+```{r}
+#| label: load-fcs
+#| message: false
+# ── EXPENSIVE, and run in Positron: this builds the object from the FCS files. ────────────────
+stopifnot("the panel sheet was not found at PANEL_FILE" = file.exists(PANEL_FILE),
+          "the FCS folder FCS_DIR does not exist" = dir.exists(FCS_DIR))
+# The build ends in `compensate`; what that needs is checked now, before the files are read.
+need_compensation_inputs()
+
+panel <- read_sheet(PANEL_FILE)
+.pmiss <- setdiff(c("fcs_colname", "antigen", "marker_class"), names(panel))
+if (length(.pmiss))
+  stop("The panel sheet lacks a column this notebook reads: ", paste(.pmiss, collapse = ", "),
+       "\n  columns in the sheet: ", paste(names(panel), collapse = ", "), call. = FALSE)
+panel <- panel[, c("fcs_colname", "antigen", "marker_class")]
+
+md_fcs <- as.data.frame(md)
+md_fcs$file_name <- gsub("\\.fcs$", "", md_fcs$file_name)
+
+# Every sample in the metadata must have its file. Trimming the metadata to the files present
+# would drop a sample without a word.
+fcs_files <- list.files(FCS_DIR, pattern = "\\.fcs$", full.names = FALSE)
+.have <- gsub("\\.fcs$", "", fcs_files)
+.miss <- setdiff(md_fcs$file_name, .have)
+if (length(.miss))
+  stop("The metadata sheet names FCS files that are not in ", FCS_DIR, ":\n  ",
+       paste(.miss, collapse = "\n  "), "\n  files found:\n  ",
+       if (length(fcs_files)) paste(fcs_files, collapse = "\n  ") else "(none)",
+       call. = FALSE)
+# A file the sheet does not name is left out, and said so: it may be a sample missing from
+# the sheet.
+.extra <- fcs_files[!.have %in% md_fcs$file_name]
+if (length(.extra))
+  cat(sprintf("%d FCS file(s) in %s that the metadata sheet does not name, not loaded:\n  %s\n",
+              length(.extra), FCS_DIR, paste(.extra, collapse = "\n  ")))
+fcs_files <- fcs_files[.have %in% md_fcs$file_name]
+
+# Read FCS files (no transformation; CATALYST applies the arcsinh later)
+ff_list <- lapply(file.path(FCS_DIR, fcs_files), read.FCS,
+                  transformation = FALSE, truncate_max_range = FALSE)
+names(ff_list) <- fcs_files
+
+# Every panel channel must be in every file. Taking the intersection would drop a channel the
+# acquisition template lacked without a word.
+.chan_miss <- lapply(ff_list, function(ff) setdiff(panel$fcs_colname, colnames(ff)))
+if (any(lengths(.chan_miss) > 0)) {
+  .bad <- .chan_miss[lengths(.chan_miss) > 0]
+  stop("panel channels absent from the FCS files:\n  ",
+       paste(sprintf("%s: %s", names(.bad), vapply(.bad, paste, "", collapse = ", ")),
+             collapse = "\n  "), call. = FALSE)
+}
+common_channels <- panel$fcs_colname
+
+fs <- as(lapply(ff_list, `[`, , common_channels), "flowSet")
+sampleNames(fs) <- gsub("\\.fcs$", "", fcs_files)
+
+markers <- setNames(panel$antigen[match(common_channels, panel$fcs_colname)],
+                    common_channels)
+markernames(fs) <- markers
+
+# cofactor = COFACTOR, as compCytof() is given below: the compensation check compares this
+# object with the compensated one, so both carry the same transformation.
+sce_uncomp <- prepData(fs, panel, md_fcs,
+                       md_cols = list(file = "file_name", id = "sample_id",
+                                      factors = MD_FACTORS),
+                       cofactor = COFACTOR)
+colData(sce_uncomp)[[SAMPLE_COL]] <- sample_factor(sce_uncomp)
+
+cat(sprintf("sce_uncomp: %s cells, %d samples, %d channels\n",
+            format(ncol(sce_uncomp), big.mark = ","),
+            dplyr::n_distinct(as.character(sce_uncomp$sample_id)), nrow(sce_uncomp)))
+print(table(colData(sce_uncomp)[[SAMPLE_COL]]))
+```
+
+The spillover matrix is computed from the compensation-bead file and can then be adjusted by hand. An adjustment is a property of a metal pair, so one tuned on an earlier panel is carried over with its value unchanged and a comment saying where it came from.
+
+```{r}
+#| label: compensate
+#| message: false
+# ── EXPENSIVE, and run in Positron: this replaces the counts with compensated counts. ──────────
+need_compensation_inputs()
+
+comp_fcs <- list.files(COMP_DIR, pattern = "\\.fcs$", full.names = TRUE)
+stopifnot("no bead FCS file in the compensation folder" = length(comp_fcs) > 0)
+fscomp <- read.flowSet(comp_fcs, transformation = FALSE, truncate_max_range = FALSE)
+
+panel_beads <- read_sheet(COMP_PANEL_FILE)
+md_beads    <- read_sheet(COMP_MD_FILE)
+
+sce_beads <- prepData(fscomp, panel_beads, md_beads)
+
+sce_beads <- assignPrelim(sce_beads, COMP_BC_MASSES, verbose = FALSE)
+sce_beads <- applyCutoffs(estCutoffs(sce_beads))
+sce_beads <- computeSpillmat(sce_beads)
+sm <- metadata(sce_beads)$spillover_matrix
+
+chs <- channels(sce_beads)
+ss_chs <- chs[rowData(sce_beads)$is_bc]
+stopifnot(all(diag(sm[ss_chs, ss_chs]) == 1), all(sm >= 0 & sm <= 1))
+
+sm_co <- sm
+
+# --- Manual spillover adjustments ------------------------------------------------------------
+# TODO: carry forward the adjustments tuned for this panel, one call per metal pair, each with
+# a comment saying what spills into what and why the computed value was not enough. None is
+# applied until a call is added here. The form is:
+#
+#   sm_co <- update_spill_matrix2(spill_matrix = sm_co, panel_table = panel,
+#                                 source_channel = "<source channel>",
+#                                 dest_channel = "<destination channel>", value = <fraction>)
+
+# What the block above changed, so that a run with no adjustment says so in the log.
+cat(sprintf("manual spillover adjustments: %d of %d entries differ from the computed matrix\n",
+            sum(sm_co != sm), length(sm)))
+
+# NNLS compensate, then arcsinh
+sce_comp <- compCytof(sce_uncomp, sm_co,
+                      method = "nnls", overwrite = TRUE,
+                      transform = TRUE, cofactor = COFACTOR)
+
+cat(sprintf("Compensation done. sce_comp has %s cells.\n",
+            format(ncol(sce_comp), big.mark = ",")))
+```
+
+The check on the compensation: the adjusted spill matrix, and every spill pair before and after. Both chunks need the objects the build leaves in the session, so they are `eval: false` and are run there, from plan 1b.
+
+```{r}
+#| label: comp-spillmat-plot
+#| eval: false
+#| fig-width: 8
+#| fig-height: 8
+# `eval: false`: it needs sce_beads and sm_co, which exist only in the session that ran
+# `compensate`. It is run from plan 1b in that session; a headless render cannot supply them.
+# The plot is print()ed because a run plan evaluates the chunk without auto-printing.
+rowData(sce_beads)$is_bc <- TRUE
+metadata(sce_beads)$spillover_matrix <- sm_co
+print(plotSpillmat(sce_beads))
+```
+
+```{r}
+#| label: comp-check
+#| eval: false
+#| fig-height: 25
+#| fig-width: 45
+# `eval: false`: it needs sce_uncomp, sce_comp, sm_co and panel, which exist only in the
+# session that ran the build. It is run from plan 1b in that session; a headless render cannot
+# supply them. The plots are print()ed because a run plan evaluates the chunk without
+# auto-printing.
+p1 <- plot_spill(sm_co, sce_uncomp, panel, exclude_channels = NULL, mode = "spill_matrix",
+                 n_col = 20, n_cells = 1000, title_size = 14, axis_size = 14,
+                 organize_by = "destination")
+p2 <- plot_spill(sm_co, sce_comp, panel, exclude_channels = NULL, mode = "spill_matrix",
+                 n_col = 20, n_cells = 1000, title_size = 14, axis_size = 14,
+                 organize_by = "destination")
+f2(p1, h = 25, w = 45, title = "spillmat uncompensated", format = "png")
+f2(p2, h = 25, w = 45, title = "spillmat compensated", format = "png")
+print(p1 + plot_annotation("uncompensated"))
+print(p2 + plot_annotation("compensated"))
+```
+
+```{r}
+#| label: save-compensated
+#| message: false
+qs2::qs_save(sce_comp, CKPT_COMP)
+cat(sprintf("Saved %s (%s cells)\n", basename(CKPT_COMP),
+            format(ncol(sce_comp), big.mark = ",")))
+```
+
+The first checkpoint. Step 2 reads it and changes nothing.
+
+```{r}
+#| label: load-compensated
+#| eval: false
+# The checkpoint reload. `eval: false` because in a top-to-bottom run `sce_comp` is already
+# in memory from the chunks above; headlessly this is the only source of it.
+#
+# It reads the file UNCONDITIONALLY - never `if (!exists("sce_comp"))`. A stale object left
+# over from an earlier build would otherwise shadow what is on disk.
+sce_comp <- qs2::qs_read(CKPT_COMP)
+cat(sprintf("Reloaded sce_comp: %s cells, %d samples\n",
+            format(ncol(sce_comp), big.mark = ","),
+            dplyr::n_distinct(as.character(sce_comp$sample_id))))
+```
+
+# 2. Events per sample
+
+Events in the compensated object, one row per sample.
+
+```{r}
+#| label: events-per-sample
+#| message: false
+.sid <- droplevels(factor(sce_comp$sample_id))
+.grp <- sample_factor(sce_comp)
+stopifnot("the object and the metadata sheet hold different samples" =
+            setequal(levels(.sid), as.character(md$sample_id)))
+ev <- data.frame(sample_id = levels(.sid), events = as.integer(table(.sid)),
+                 stringsAsFactors = FALSE)
+ev[[SAMPLE_COL]] <- as.character(.grp[match(ev$sample_id, as.character(.sid))])
+ev$pct_of_all_events <- 100 * ev$events / sum(ev$events)
+ev <- ev[order(match(ev[[SAMPLE_COL]], SAMPLE_LEVELS), ev$sample_id),
+         c("sample_id", SAMPLE_COL, "events", "pct_of_all_events")]
+print(ev, row.names = FALSE)
+saveTable(ev, paste0(EXP_ID, "_events_per_sample"), digits = 2)
+```
+
+# 3. Cluster
+
+```{r}
+#| label: type-markers
+#| message: false
+# MUTATES THE OBJECT - run in Positron. `sce` starts as the compensated object.
+sce <- sce_comp
+need_markers(sce, TYPE_MARKERS, "TYPE_MARKERS")
+.inherited <- rownames(sce)[SummarizedExperiment::rowData(sce)$marker_class == "type"]
+SummarizedExperiment::rowData(sce)$marker_class <- "state"
+# The one-index subset is the CATALYST idiom, and the replacement propagates back through
+# `[<-`; do not "fix" it to a two-index form.
+SummarizedExperiment::rowData(sce[TYPE_MARKERS])$marker_class <- "type"
+
+cat(sprintf("type markers: %d inherited -> %d declared (%s)\n",
+            length(.inherited), length(TYPE_MARKERS), TYPE_LAB))
+cat("  SOM input: ", paste(TYPE_MARKERS, collapse = ", "), "\n",
+    "  left out:  ", paste(setdiff(rownames(sce), TYPE_MARKERS), collapse = ", "), "\n", sep = "")
+```
+
+```{r}
+#| label: cluster
+#| message: false
+#| stochastic: true
+# ── EXPENSIVE, and run in Positron: this partitions the object. ────────────────────────────────
+#
+# K_MAX and CLUS_K are declared once, in `constants`, with the warning that goes with them:
+# after a change to K_MAX or to the type marker list the merge canvas must be rebuilt. They
+# live there rather than here so that a figure chunk asking for CLUS_K cannot drag this chunk
+# into a headless render and silently re-cluster to get it.
+stopifnot("K_MAX / CLUS_K not found - re-run `constants`" = exists("K_MAX") && exists("CLUS_K"))
+
+# What the SOM actually sees, asserted rather than assumed.
+.tm <- rownames(sce)[SummarizedExperiment::rowData(sce)$marker_class == "type"]
+stopifnot("marker_class is not TYPE_MARKERS - run `type-markers` first" =
+            setequal(.tm, TYPE_MARKERS))
+cat(sprintf("SOM input: %d type markers - %s\n", length(.tm), paste(.tm, collapse = ", ")))
+
+set.seed(my_seed)
+sce <- CATALYST::cluster(sce, features = "type", xdim = 10, ydim = 10,
+                         maxK = K_MAX, seed = my_seed, verbose = FALSE)
+cat("levels available: ", paste(head(names(S4Vectors::metadata(sce)$cluster_codes), 4),
+                                collapse = ", "), " ... meta", K_MAX, "\n", sep = "")
+
+# One level of cluster_id per SOM node. FlowSOM can leave a node without a cell, and CATALYST
+# builds cluster_id from the nodes that have cells, so the factor's levels then skip that node.
+# CATALYST::cluster_ids() matches on the node label and is unaffected. Every seekit plotter
+# reads the cluster codes by the factor's integer code instead, which puts each cell of a
+# higher-numbered node in the cluster of the node before it: the heatmap, the cluster UMAP and
+# any seekit abundance plot then count those cells in the wrong metacluster, without an error.
+# With a level for every node, code and label are the same number.
+.nodes <- as.character(S4Vectors::metadata(sce)$cluster_codes[[1]])
+.empty <- setdiff(.nodes, levels(sce$cluster_id))
+sce$cluster_id <- factor(as.character(sce$cluster_id), levels = .nodes)
+stopifnot("a cell lost its SOM node in the relevel" = !anyNA(sce$cluster_id))
+cat(sprintf("SOM nodes without a cell: %s; cluster_id now has %d levels for %d nodes\n",
+            if (length(.empty)) paste(.empty, collapse = ", ") else "none",
+            nlevels(sce$cluster_id), length(.nodes)))
+```
+
+```{r}
+#| label: dr
+#| message: false
+#| stochastic: true
+# Also expensive and also run in Positron. UMAP_CELLS = NULL embeds every cell.
+set.seed(my_seed)
+sce <- CATALYST::runDR(sce, dr = "UMAP", cells = UMAP_CELLS, features = "type")
+cat(sprintf("UMAP: %s of %s cells embedded\n",
+            format(sum(!is.na(reducedDim(sce, "UMAP")[, 1])), big.mark = ","),
+            format(ncol(sce), big.mark = ",")))
+```
+
+```{r}
+#| label: save
+#| message: false
+# The checkpoint is not overwritten with an object the figures cannot be drawn from: it must
+# carry the level they read and an embedding.
+.levels <- names(S4Vectors::metadata(sce)$cluster_codes)
+if (!CLUS_K %in% .levels)
+  stop("`sce` has no ", CLUS_K, " level, so ", basename(CKPT), " is not overwritten.",
+       "\n  levels in the object: ", paste(.levels, collapse = ", "),
+       "\n  -> run `cluster` first, or correct CLUS_K and K_MAX in `constants`.", call. = FALSE)
+if (!"UMAP" %in% reducedDimNames(sce))
+  stop("`sce` has no UMAP, so ", basename(CKPT), " is not overwritten.",
+       "\n  -> run `dr` first.", call. = FALSE)
+qs2::qs_save(sce, CKPT)
+cat(sprintf("Saved %s (%s cells)\n", basename(CKPT), format(ncol(sce), big.mark = ",")))
+cat(sprintf("  levels available, from K_MAX = %s: %s\n  level the figures read, CLUS_K: %s\n",
+            K_MAX, paste(.levels, collapse = ", "), CLUS_K))
+```
+
+The second checkpoint. Everything above it changes `sce`; everything below only reads it, apart from the merge in step 6, which is followed by `save` again.
+
+```{r}
+#| label: load
+#| eval: false
+# The checkpoint reload. `eval: false` because in a top-to-bottom run `sce` is already in
+# memory from the chunks above; headlessly this is the only source of it.
+#
+# It reads the file UNCONDITIONALLY - never `if (!exists("sce"))`. A stale object left over
+# from an earlier partition would otherwise shadow what is on disk, and every figure below
+# would be drawn from a clustering that no longer exists.
+sce <- qs2::qs_read(CKPT)
+
+# seekit's plotters read a cell's cluster through the integer code of cluster_id, so the factor
+# must carry one level per SOM node (see `cluster`). A checkpoint saved without that is not
+# drawn from: its heatmap and its bars would count some cells in a neighbouring cluster.
+.nodes <- as.character(S4Vectors::metadata(sce)$cluster_codes[[1]])
+if (!identical(levels(sce$cluster_id), .nodes))
+  stop(basename(CKPT), " has ", nlevels(sce$cluster_id), " levels of cluster_id for ",
+       length(.nodes), " SOM nodes (no level for node ",
+       paste(setdiff(.nodes, levels(sce$cluster_id)), collapse = ", "),
+       ").\n  -> it was saved before `cluster` gave every node a level; run plan 2 again.",
+       call. = FALSE)
+cat(sprintf("Reloaded sce: %s cells, %d samples, %s = %d clusters, %s cells on the UMAP\n",
+            format(ncol(sce), big.mark = ","),
+            dplyr::n_distinct(as.character(sce$sample_id)),
+            CLUS_K, nlevels(CATALYST::cluster_ids(sce, CLUS_K)),
+            format(sum(!is.na(reducedDim(sce, "UMAP")[, 1])), big.mark = ",")))
+```
+
+```{r}
+#| label: palette
+#| message: false
+# One palette, shared by the heatmap and every UMAP, so a cluster is the same colour in the
+# figure the canvas is authored from and the figure it is read against.
+clus_pal <- cluster_palette(sce, k = CLUS_K)
+stopifnot("palette does not cover every cluster" =
+            all(levels(CATALYST::cluster_ids(sce, CLUS_K)) %in% names(clus_pal)))
+```
+
+# 4. The clusters
+
+## The clusters as numbers
+
+The canvas is authored from these, not from the colours. `pct_pooled` is the pooled per-cluster percentage, cells in the cluster over all cells, which is the `%` column the merge canvas requires. A sample with more cells weighs more in it; the second table holds each level of `SAMPLE_COL` fixed.
+
+```{r}
+#| label: cluster-pct
+#| message: false
+.k  <- CATALYST::cluster_ids(sce, CLUS_K)
+.ss <- sample_factor(sce)
+
+clus_pct <- data.frame(cluster = .k) |>
+  dplyr::count(cluster, name = "n_cells", .drop = FALSE) |>   # a cluster with no cell is still listed
+  dplyr::mutate(pct_pooled = round(100 * n_cells / sum(n_cells), 2))
+cat(sprintf("Pooled per-cluster %% of all %s cells (the canvas `%%` column):\n",
+            format(ncol(sce), big.mark = ",")))
+print(as.data.frame(clus_pct), row.names = FALSE)
+saveTable(as.data.frame(clus_pct), paste0(EXP_ID, "_cluster_pct_pooled"), digits = 2)
+
+# What fraction of the cells of each SAMPLE_COL level sits in each cluster: rows sum to 100.
+level_by_clus <- round(100 * prop.table(table(level = .ss, cluster = .k), margin = 1), 1)
+cat(sprintf("\nWhere the cells of each %s sit (row %% across clusters, pooled over its cells):\n",
+            SAMPLE_COL))
+print(as.data.frame.matrix(level_by_clus))
+```
+
+## Heatmap — the matrix the merge canvas is authored from
+
+`plotExprHeatmap1()` attaches the scaled cluster-median matrix as `source_data`, so `f2(saveExcel = TRUE)` writes the `*_data.xlsx` that cluster identities are read from, and it returns `row_labels_df`, the dendrogram order from top to bottom. Both are requirements of figtracer's `docs/MERGE_CANVAS.md`.
+
+```{r}
+#| label: fig-cluster-heatmap
+#| fig-height: 8
+#| fig-width: 17
+#| message: false
+# row_dend = FALSE: the rows are still clustered and keep that order; the tree is not drawn.
+hm <- plotExprHeatmap1(sce, features = "type", by = "cluster_id", k = CLUS_K,
+                       scale = "first", q = 0.01, perc = TRUE, bars = TRUE,
+                       row_names = TRUE, row_clust = TRUE, row_anno = TRUE,
+                       row_dend = FALSE, col_dend = FALSE, bin_anno = FALSE,
+                       named_k_pal = clus_pal)
+hm$heatmap
+f2(hm, h = 8, w = 17, title = sprintf("%s heatmap %s", LINEAGE, CLUS_K), embed = TRUE,
+   saveExcel = TRUE)
+
+# The row order the merge-canvas table must be written in. Printed rather than reproduced
+# from the saved matrix, because this is the order ComplexHeatmap actually drew.
+CLUS_ORDER <- hm$row_labels_df$row_labels
+cat("\ndendrogram order, top to bottom (write the canvas table in THIS order):\n")
+cat(paste(CLUS_ORDER, collapse = ", "), "\n")
+```
+
+## UMAP by cluster
+
+```{r}
+#| label: fig-umap-clusters
+#| fig-height: 8
+#| fig-width: 10
+#| message: false
+p <- plotDR1(sce, dr = "UMAP", color_by = CLUS_K, rast = TRUE, hide_axis = TRUE) +
+  scale_color_manual(values = clus_pal) + labs(colour = "Cluster") +
+  theme(text = element_text(size = 18))
+
+# Centroids from the plot's own data, so a label cannot drift away from the points it names.
+.d   <- p$data[!is.na(p$data$x) & !is.na(p$data$y), ]
+.cen <- aggregate(.d[c("x", "y")], by = list(z = droplevels(factor(.d[[CLUS_K]]))), FUN = median)
+p <- p + geom_label_repel(data = .cen, aes(x, y, label = z), inherit.aes = FALSE,
+                          show.legend = FALSE, alpha = 0.75, size = 4, label.size = 0,
+                          max.overlaps = Inf) +
+  ggtitle(sprintf("%s, %s (%d clusters)",
+                  LINEAGE, CLUS_K, nlevels(CATALYST::cluster_ids(sce, CLUS_K))),
+          subtitle = sprintf("%s of %s cells embedded, %d samples; clustered on %s",
+                             format(sum(!is.na(reducedDim(sce, "UMAP")[, 1])), big.mark = ","),
+                             format(ncol(sce), big.mark = ","),
+                             dplyr::n_distinct(as.character(sce$sample_id)), TYPE_LAB))
+p
+f2(p, h = 8, w = 10, title = sprintf("%s UMAP %s", LINEAGE, CLUS_K), embed = TRUE,
+   saveExcel = FALSE)
+```
+
+## UMAP by marker
+
+```{r}
+#| label: fig-umap-markers
+#| fig-height: 13
+#| fig-width: 17
+#| message: false
+# Sized for about twenty markers in five columns; change h with the number of rows.
+.mk <- intersect(UMAP_MARKERS, rownames(sce))
+if (length(.mk) < length(UMAP_MARKERS))
+  cat(sprintf("not on this panel, dropped: %s\n",
+              paste(setdiff(UMAP_MARKERS, .mk), collapse = ", ")))
+stopifnot("no UMAP marker is present in the SCE" = length(.mk) > 0)
+
+# The plot melts markers x cells, so it is drawn from at most UMAP_MARKER_CELLS cells. They are
+# a random sample of ALL the embedded cells, not a number per sample, so the samples stay in
+# proportion.
+.emb <- which(!is.na(reducedDim(sce, "UMAP")[, 1]))
+set.seed(my_seed)
+.draw <- .emb[sort(sample.int(length(.emb), min(length(.emb), UMAP_MARKER_CELLS)))]
+
+p <- plotDR1(sce[, .draw], dr = "UMAP", color_by = .mk, ncol = 5, scale = TRUE,
+             rast = TRUE, hide_axis = TRUE) +
+  theme(text = element_text(size = 18)) +
+  ggtitle(sprintf("%s, UMAP by marker", LINEAGE),
+          subtitle = sprintf("%s of %s embedded cells drawn%s",
+                             format(length(.draw), big.mark = ","),
+                             format(length(.emb), big.mark = ","),
+                             if (length(.draw) < length(.emb))
+                               ", a random sample of all embedded cells" else ""))
+p
+f2(p, h = 13, w = 17, title = sprintf("%s UMAP markers", LINEAGE), embed = TRUE,
+   saveExcel = FALSE)
+```
+
+# 5. Where the samples sit
+
+## UMAP by sample
+
+```{r}
+#| label: fig-umap-by-sample
+#| fig-width: 10
+#| fig-height: 8
+#| message: false
+# random_order = TRUE: the points are drawn in random order, so no level is drawn over the
+# others. To put one level underneath as the background, give plot_order instead.
+.n_xy <- sum(!is.na(reducedDim(sce, "UMAP")[, 1]))
+p <- plotDR1(sce, dr = "UMAP", color_by = SAMPLE_COL, k_pal = SAMPLE_PAL,
+             legend_title = SAMPLE_COL, random_order = TRUE,
+             rast = TRUE, hide_axis = TRUE) +
+  ggtitle(sprintf("UMAP by %s", SAMPLE_COL),
+          subtitle = sprintf("%s of %s cells embedded; clustered on %s",
+                             format(.n_xy, big.mark = ","),
+                             format(ncol(sce), big.mark = ","), TYPE_LAB))
+p
+f2(p, w = 10, h = 8, title = sprintf("%s UMAP by sample", LINEAGE), embed = TRUE,
+   saveExcel = FALSE)
+```
+
+The same embedding with one panel per level of `SAMPLE_COL`.
+
+```{r}
+#| label: fig-umap-by-sample-facets
+#| fig-width: 16
+#| fig-height: 9
+#| message: false
+.ss  <- sample_factor(sce)
+.xy  <- !is.na(reducedDim(sce, "UMAP")[, 1])
+.n   <- table(.ss[.xy])
+p <- plotDR1(sce, dr = "UMAP", color_by = SAMPLE_COL, facet_by = SAMPLE_COL, ncol = 4,
+             k_pal = SAMPLE_PAL, legend_title = SAMPLE_COL, rast = TRUE, hide_axis = TRUE) +
+  ggtitle(sprintf("UMAP by %s, one panel each", SAMPLE_COL),
+          subtitle = paste(strwrap(sprintf("cells embedded: %s", paste(sprintf(
+            "%s %s", names(.n), trimws(format(as.integer(.n), big.mark = ","))), collapse = "; ")),
+            width = 110), collapse = "\n"))
+p
+f2(p, w = 16, h = 9, title = sprintf("%s UMAP by sample facets", LINEAGE), embed = TRUE,
+   saveExcel = FALSE)
+```
+
+The clusters in each level of `SAMPLE_COL`.
+
+```{r}
+#| label: fig-umap-clusters-by-sample
+#| fig-width: 16
+#| fig-height: 9
+#| message: false
+p <- plotDR1(sce, dr = "UMAP", color_by = CLUS_K, facet_by = SAMPLE_COL, ncol = 4,
+             rast = TRUE, hide_axis = TRUE) +
+  scale_color_manual(values = clus_pal) + labs(colour = "Cluster") +
+  ggtitle(sprintf("%s clusters by %s", CLUS_K, SAMPLE_COL))
+p
+f2(p, w = 16, h = 9, title = sprintf("%s UMAP %s by sample", LINEAGE, CLUS_K), embed = TRUE,
+   saveExcel = FALSE)
+```
+
+## Cluster composition by sample
+
+One stacked bar per level of `SAMPLE_COL`. `plotAbundanceStacked` takes the percentage of each sample's cells in each cluster and averages it over the samples of a bar, so with one sample per level a bar is that sample's composition, and with several it is the mean of theirs and not the pooled percentage. The table is counted the same way and saved, with the number of samples behind each bar.
+
+```{r}
+#| label: fig-cluster-composition-by-sample
+#| fig-height: 8
+#| fig-width: 11
+#| message: false
+.k   <- CATALYST::cluster_ids(sce, CLUS_K)
+.sid <- droplevels(factor(sce$sample_id))
+# The % of each sample's cells in each cluster, then the mean over the samples of a level.
+per_sample <- as.data.frame(100 * prop.table(table(cluster = .k, sample_id = .sid), 2),
+                            responseName = "pct")
+per_sample[[SAMPLE_COL]] <- sample_factor(sce)[match(per_sample$sample_id, sce$sample_id)]
+comp <- per_sample |>
+  dplyr::group_by(dplyr::across(dplyr::all_of(c("cluster", SAMPLE_COL)))) |>
+  dplyr::summarise(pct = mean(pct), n_samples = dplyr::n(), .groups = "drop") |>
+  as.data.frame()
+saveTable(comp, paste0(EXP_ID, "_cluster_pct_by_sample"), digits = 2)
+
+p <- plotAbundanceStacked(
+  sce,
+  k_abundances        = CLUS_K,
+  use_coldata         = FALSE,
+  meta                = c("sample_id", SAMPLE_COL),
+  group_by            = SAMPLE_COL,
+  k_pal               = clus_pal,
+  average_across_samples = TRUE,
+  bar_outline         = TRUE,
+  text_size           = 15,
+  rotang              = 45
+) +
+  scale_x_discrete(limits = SAMPLE_LEVELS, expand = c(0, 0)) + labs(fill = "Cluster") +
+  ggtitle(sprintf("Cluster composition by %s, %s", SAMPLE_COL, CLUS_K),
+          subtitle = sprintf("Mean over the samples of a bar of the %% of a sample's cells; %s cells, %d samples in %d bars",
+                             format(ncol(sce), big.mark = ","), nlevels(.sid),
+                             length(SAMPLE_LEVELS)))
+
+# The bars are drawn by seekit and the table is counted with CATALYST::cluster_ids(); they
+# have to be the same numbers.
+.chk <- merge(as.data.frame(p$data)[, c("cluster_id", SAMPLE_COL, "Freq")], comp,
+              by.x = c("cluster_id", SAMPLE_COL), by.y = c("cluster", SAMPLE_COL))
+stopifnot("the stacked bars and the table disagree" =
+            nrow(.chk) == nrow(comp) && all(abs(.chk$Freq - .chk$pct) < 1e-6))
+p
+f2(p, h = 8, w = 11, title = sprintf("%s cluster composition by sample %s", LINEAGE, CLUS_K),
+   embed = TRUE, saveExcel = TRUE)
+```
+
+# 6. Merging the clusters — the canvas is the source of truth
+
+Labels come from the merge canvas in the vault, `MERGE_CANVAS`, read back with `read_merge_canvas()`. Nothing here names a cluster. The canvas is authored from the heatmap's `*_data.xlsx` median matrix, with the table rows in the heatmap's dendrogram order (printed by `fig-cluster-heatmap`) and a `%` column equal to `pct_pooled`.
+
+```{r}
+#| label: merge
+#| message: false
+# MUTATES THE OBJECT - run in Positron. Adds the MERGE_ID clustering level.
+if (!file.exists(MERGE_CANVAS)) {
+  cat("No merge canvas yet at\n  ", MERGE_CANVAS, "\n",
+      "  Clusters stay as numeric ", CLUS_K, " ids until it is authored.\n", sep = "")
+} else {
+  mt <- read_merge_canvas(MERGE_CANVAS, cols = NULL, seebench = MERGE_CLI)
+
+  # Every cluster present exactly once - the check that catches a canvas written against an
+  # earlier partition, which is otherwise silent and mislabels a share of the cells.
+  .ids <- levels(CATALYST::cluster_ids(sce, CLUS_K))
+  .can <- as.character(mt$old_cluster)
+  if (!setequal(.can, .ids) || anyDuplicated(.can))
+    stop(sprintf(paste("The canvas does not match this partition.\n",
+                       "  in the canvas but not in %s: %s\n",
+                       "  in %s but not in the canvas: %s\n",
+                       "  duplicated in the canvas: %s\n",
+                       "  -> the canvas was written against a different clustering; rebuild it."),
+                 CLUS_K, paste(setdiff(.can, .ids), collapse = ", "),
+                 CLUS_K, paste(setdiff(.ids, .can), collapse = ", "),
+                 paste(unique(.can[duplicated(.can)]), collapse = ", ")), call. = FALSE)
+
+  # Every cluster has a label: mergeClusters() is never handed an empty or missing new_cluster.
+  .new <- trimws(as.character(mt$new_cluster))
+  .unlabelled <- is.na(.new) | !nzchar(.new)
+  if (any(.unlabelled))
+    stop("The canvas gives no new_cluster for these ", CLUS_K, " clusters: ",
+         paste(.can[.unlabelled], collapse = ", "),
+         "\n  -> give every row of the canvas table a label.", call. = FALSE)
+
+  sce <- CATALYST::mergeClusters(sce, k = CLUS_K,
+                                 table = mt[, c("old_cluster", "new_cluster")],
+                                 id = MERGE_ID, overwrite = TRUE)
+  cat(sprintf("merged %d clusters into %d labels:\n", length(.ids),
+              dplyr::n_distinct(mt$new_cluster)))
+  print(table(CATALYST::cluster_ids(sce, MERGE_ID)))
+  cat("\nNow re-run `save`, then run plan 4 for the figures of the merged labels.\n")
+}
+```
+
+# 7. The merged labels
+
+Everything here reads the `MERGE_ID` level that `merge` adds, and is skipped with a message while the object has none. One palette serves every figure.
+
+```{r}
+#| label: merged-palette
+#| message: false
+HAS_MERGE <- MERGE_ID %in% names(S4Vectors::metadata(sce)$cluster_codes)
+if (!HAS_MERGE) {
+  cat("No '", MERGE_ID, "' level in this object yet - edit the canvas and run plan 3.\n", sep = "")
+} else {
+  .m <- CATALYST::cluster_ids(sce, MERGE_ID)
+  MERGE_LEVELS <- levels(.m)
+  merge_pal <- cluster_palette(sce, k = MERGE_ID)
+  stopifnot("palette does not cover every merged label" = all(MERGE_LEVELS %in% names(merge_pal)))
+
+  # Pooled share of each label, and which clusters went into it.
+  .from <- tapply(as.character(CATALYST::cluster_ids(sce, CLUS_K)), .m,
+                  function(k) paste(sort(as.integer(unique(k))), collapse = ", "))
+  merged_pct <- data.frame(label = MERGE_LEVELS,
+                           clusters = as.character(.from[MERGE_LEVELS]),
+                           n_cells = as.integer(table(.m)[MERGE_LEVELS]))
+  merged_pct$pct_pooled <- round(100 * merged_pct$n_cells / sum(merged_pct$n_cells), 2)
+  cat(sprintf("%d %s clusters in %d labels, %s cells:\n", nlevels(CATALYST::cluster_ids(sce, CLUS_K)),
+              CLUS_K, length(MERGE_LEVELS), format(ncol(sce), big.mark = ",")))
+  print(merged_pct, row.names = FALSE)
+  saveTable(merged_pct, paste0(EXP_ID, "_merged_label_pct_pooled"), digits = 2)
+}
+```
+
+## Heatmap of the merged labels
+
+```{r}
+#| label: fig-merged-heatmap
+#| fig-height: 8
+#| fig-width: 17
+#| message: false
+if (!HAS_MERGE) {
+  cat("skipped: no '", MERGE_ID, "' level.\n", sep = "")
+} else {
+  hm_m <- plotExprHeatmap1(sce, features = "type", by = "cluster_id", k = MERGE_ID,
+                           scale = "first", q = 0.01, perc = TRUE, bars = TRUE,
+                           row_names = TRUE, row_clust = TRUE, row_anno = TRUE,
+                           row_dend = FALSE, col_dend = FALSE, bin_anno = FALSE,
+                           named_k_pal = merge_pal)
+  print(hm_m$heatmap)
+  f2(hm_m, h = 8, w = 17, title = sprintf("%s heatmap merged labels", LINEAGE), embed = TRUE,
+     saveExcel = TRUE)
+}
+```
+
+## UMAP by merged label
+
+```{r}
+#| label: fig-umap-merged
+#| fig-height: 8
+#| fig-width: 12
+#| message: false
+if (!HAS_MERGE) {
+  cat("skipped: no '", MERGE_ID, "' level.\n", sep = "")
+} else {
+  p <- plotDR1(sce, dr = "UMAP", color_by = MERGE_ID, rast = TRUE, hide_axis = TRUE) +
+    scale_color_manual(values = merge_pal) + labs(colour = "Label") +
+    theme(text = element_text(size = 18))
+
+  # Centroids from the plot's own data, so a label cannot drift away from the points it names.
+  .d   <- p$data[!is.na(p$data$x) & !is.na(p$data$y), ]
+  .cen <- aggregate(.d[c("x", "y")], by = list(z = droplevels(factor(.d[[MERGE_ID]]))), FUN = median)
+  p <- p + geom_label_repel(data = .cen, aes(x, y, label = z), inherit.aes = FALSE,
+                            show.legend = FALSE, alpha = 0.75, size = 4, label.size = 0,
+                            max.overlaps = Inf) +
+    ggtitle(sprintf("%s, %d merged labels", LINEAGE, length(MERGE_LEVELS)),
+            subtitle = sprintf("%s of %s cells embedded, %d samples; %d %s clusters merged from the canvas",
+                               format(nrow(.d), big.mark = ","), format(ncol(sce), big.mark = ","),
+                               dplyr::n_distinct(as.character(sce$sample_id)),
+                               nlevels(CATALYST::cluster_ids(sce, CLUS_K)), CLUS_K))
+  print(p)
+  f2(p, h = 8, w = 12, title = sprintf("%s UMAP merged labels", LINEAGE), embed = TRUE,
+     saveExcel = FALSE)
+}
+```
+
+```{r}
+#| label: fig-umap-merged-by-sample
+#| fig-width: 17
+#| fig-height: 9
+#| message: false
+if (!HAS_MERGE) {
+  cat("skipped: no '", MERGE_ID, "' level.\n", sep = "")
+} else {
+  p <- plotDR1(sce, dr = "UMAP", color_by = MERGE_ID, facet_by = SAMPLE_COL, ncol = 4,
+               rast = TRUE, hide_axis = TRUE) +
+    scale_color_manual(values = merge_pal) + labs(colour = "Label") +
+    ggtitle(sprintf("Merged labels by %s", SAMPLE_COL))
+  print(p)
+  f2(p, w = 17, h = 9, title = sprintf("%s UMAP merged labels by sample", LINEAGE), embed = TRUE,
+     saveExcel = FALSE)
+}
+```
+
+## Merged-label composition by sample
+
+One stacked bar per level of `SAMPLE_COL`, as for the clusters in step 5: the percentage of each sample's cells carrying each label, averaged over the samples of a bar.
+
+```{r}
+#| label: fig-merged-composition-by-sample
+#| fig-width: 11
+#| fig-height: 8
+#| message: false
+if (!HAS_MERGE) {
+  cat("skipped: no '", MERGE_ID, "' level.\n", sep = "")
+} else {
+  .m   <- CATALYST::cluster_ids(sce, MERGE_ID)
+  .sid <- droplevels(factor(sce$sample_id))
+  # The % of each sample's cells carrying each label, then the mean over the samples of a level.
+  per_sample_m <- as.data.frame(100 * prop.table(table(label = .m, sample_id = .sid), 2),
+                                responseName = "pct_of_sample")
+  per_sample_m[[SAMPLE_COL]] <- sample_factor(sce)[match(per_sample_m$sample_id, sce$sample_id)]
+  mcomp <- per_sample_m |>
+    dplyr::group_by(dplyr::across(dplyr::all_of(c("label", SAMPLE_COL)))) |>
+    dplyr::summarise(pct_of_sample = mean(pct_of_sample), n_samples = dplyr::n(),
+                     .groups = "drop") |>
+    as.data.frame()
+  saveTable(mcomp, paste0(EXP_ID, "_merged_label_pct_by_sample"), digits = 2)
+
+  p <- plotAbundanceStacked(
+    sce,
+    k_abundances        = MERGE_ID,
+    use_coldata         = FALSE,
+    meta                = c("sample_id", SAMPLE_COL),
+    group_by            = SAMPLE_COL,
+    k_pal               = merge_pal,
+    average_across_samples = TRUE,
+    bar_outline         = TRUE,
+    text_size           = 15,
+    rotang              = 45
+  ) +
+    scale_x_discrete(limits = SAMPLE_LEVELS, expand = c(0, 0)) + labs(fill = "Label") +
+    ggtitle(sprintf("Merged labels by %s", SAMPLE_COL),
+            subtitle = sprintf("Mean over the samples of a bar of the %% of a sample's cells; %d %s clusters merged into %d labels",
+                               nlevels(CATALYST::cluster_ids(sce, CLUS_K)), CLUS_K,
+                               length(MERGE_LEVELS)))
+
+  # Drawn by seekit, counted with CATALYST::cluster_ids(); they have to be the same numbers.
+  .chk <- merge(as.data.frame(p$data)[, c("cluster_id", SAMPLE_COL, "Freq")], mcomp,
+                by.x = c("cluster_id", SAMPLE_COL), by.y = c("label", SAMPLE_COL))
+  stopifnot("the stacked bars and the table disagree" =
+              nrow(.chk) == nrow(mcomp) && all(abs(.chk$Freq - .chk$pct_of_sample) < 1e-6))
+  print(p)
+  f2(p, w = 11, h = 8, title = sprintf("%s merged label composition by sample", LINEAGE),
+     embed = TRUE, saveExcel = TRUE)
+}
+```

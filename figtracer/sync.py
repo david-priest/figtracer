@@ -289,6 +289,8 @@ def main(argv=None) -> int:
     ap.add_argument("--no-figures", action="store_true", help="skip figure (re)assembly + embed")
     ap.add_argument("--no-figsync", action="store_true",
                     help="skip refreshing lab-note figures from the latest f2 render (figsync)")
+    ap.add_argument("--no-documents", action="store_true",
+                    help="skip refreshing recorded decks and Word documents in place")
     ap.add_argument("--committed-only", action="store_true",
                     help="figsync: resolve 'latest' to the newest git-committed render")
     ap.add_argument("--no-index", action="store_true", help="skip Mission Control rebuild")
@@ -297,6 +299,9 @@ def main(argv=None) -> int:
                     help="skip the note number-provenance check")
     ap.add_argument("--allow-note-drift", action="store_true",
                     help="commit even when a note carries numbers absent from outputs")
+    ap.add_argument("--strict-documents", action="store_true",
+                    help="a number on a slide or in a Word document absent from outputs blocks the "
+                         "commit too (reported either way)")
     ap.add_argument("--dpi", type=int, default=300, help="figure preview DPI (default 300)")
     ap.add_argument("-y", "--yes", action="store_true", help="execute (default is a dry run)")
     ap.add_argument("--config", help="path to projects.yaml")
@@ -355,9 +360,18 @@ def main(argv=None) -> int:
             tables = figsync.resolve_tables(data_dir)
             tres = figsync.materialize_tables(tables, eid, fs_notes, execute=execute)
             placed = {t: tables[t] for t in tres["synced"] + tres["current"]}
+            # 1b' — decks and Word documents (docs/DOCUMENTS.md): a stale picture gets the
+            # newest render in place and the file is recorded again; the rest is reported.
+            docs = {} if args.no_documents else figsync.resolve_documents(data_dir)
+            dres = None
+            if docs:
+                dres = figsync.materialize_documents(
+                    docs, figsync.vault_resolver(eid, data_dir, True, args.config), eid,
+                    figsync._outputs_dir(data_dir), execute=execute, dpi=args.dpi)
             res = figsync.materialize(figs, eid, note_dir, fs_attach, fs_notes,
                                       dpi=args.dpi, execute=execute,
-                                      tables=placed, tref=figsync._note_tables(eid, fs_notes))
+                                      tables=placed, tref=figsync._note_tables(eid, fs_notes),
+                                      documents=docs, doc_refs=figsync.document_refs(docs, eid) if docs else None)
             if tres["synced"]:
                 _do(execute, f"figsync: {len(tres['synced'])} table block(s) → "
                              f"{', '.join(tres['synced'])}")
@@ -375,6 +389,24 @@ def main(argv=None) -> int:
                       f"(re-run chunks): {', '.join(res['missing'])}")
             if res["unplaced"]:
                 print(f"      · figsync: {len(res['unplaced'])} embed=TRUE figure(s) not placed in a note")
+            if args.no_documents:
+                _do(execute, "documents: skipped (--no-documents)")
+            elif dres is not None:
+                for t, done in dres["synced"]:
+                    _do(execute, f"documents: {t}: {len(done)} figure(s) refreshed in place "
+                                 f"({', '.join(w for w, _ in done)})")
+                    figures_done.append(f"document:{t}")
+                if dres["current"]:
+                    _do(execute, f"documents: {len(dres['current'])} deck(s)/document(s) current")
+                for t in dres["locked"]:
+                    print(f"      ! documents: {t} is open in its application; not written")
+                for t in dres["missing"]:
+                    print(f"      ! documents: {t}: recorded file is missing")
+                for t, where, kind, state, title in dres["reported"]:
+                    print(f"      · documents: {t} {where}: {state} {kind} {title or ''} "
+                          f"(rebuild the deck or edit the document)")
+                for t, where, err in dres["failed"]:
+                    print(f"      ! documents: {t} {where}: {err}")
 
     # 1c — snapshot what the run PRINTED, beside what it plotted.
     #
@@ -431,21 +463,33 @@ def main(argv=None) -> int:
         if nres is not None:
             # Every finding, not just the unsourced ones: a STALE number - true in an
             # earlier run, not in this one - is the more dangerous of the two, because
-            # it reads as if it had been checked.
-            note_drift = len(nres["findings"])
+            # it reads as if it had been checked. A finding in a recorded deck or Word
+            # document is reported the same way but blocks the commit only with
+            # --strict-documents: a deck is rebuilt less often than a note is synced.
+            note_findings, doc_findings = ntc.partition(nres["findings"])
+            note_drift = len(note_findings) + (len(doc_findings) if args.strict_documents else 0)
             corpus = nres["corpus"]
-            if not note_drift:
+            if not note_findings:
                 _do(execute, f"notecheck: clean ({corpus['values']} value(s) in the corpus)")
             else:
-                n_stale = nres["summary"].get("stale", 0)
-                print(f"      ! notecheck: {note_drift} number(s) not in the current outputs"
+                n_stale = sum(1 for f in note_findings if f["check"] == "stale-number")
+                print(f"      ! notecheck: {len(note_findings)} number(s) not in the current outputs"
                       + (f" ({n_stale} stale — produced by a superseded run)" if n_stale else ""))
-                shown = nres["findings"] if note_drift <= 15 else nres["findings"][:5]
+                shown = note_findings if len(note_findings) <= 15 else note_findings[:5]
                 for item in shown:
-                    print(f"          {item['note']}:{item['line']}  {item['value']}")
-                if note_drift > len(shown):
-                    print(f"          ... and {note_drift - len(shown)} more "
+                    print(f"          {item['note']}:{ntc.location(item)}  {item['value']}")
+                if len(note_findings) > len(shown):
+                    print(f"          ... and {len(note_findings) - len(shown)} more "
                           f"(figtracer notecheck --exp {eid} --all)")
+            if doc_findings:
+                mark = "!" if args.strict_documents else "·"
+                print(f"      {mark} notecheck: {len(doc_findings)} number(s) on slides or in documents "
+                      f"not in the current outputs"
+                      + ("" if args.strict_documents else " (reported; --strict-documents blocks the commit)"))
+                for item in doc_findings[:5]:
+                    print(f"          {item['note']}:{ntc.location(item)}  {item['value']}")
+                if len(doc_findings) > 5:
+                    print(f"          ... and {len(doc_findings) - 5} more (figtracer notecheck --exp {eid} --all)")
                 # What the corpus is built from, so an absence can be read correctly.
                 if corpus["session_log_chunks"] is not None:
                     print(f"          corpus: {corpus['values']} value(s); "
@@ -459,11 +503,15 @@ def main(argv=None) -> int:
         _do(execute, "skipped (--no-commit)")
     elif note_drift and not args.allow_note_drift:
         # Refusing is the whole point: committing an unsourced number is what makes it
-        # look checked. Suppress a genuine non-result with `notecheck_ignore:` in the
-        # note's frontmatter, which is auditable, rather than with this flag.
+        # look checked. A number that was never meant to come from the analysis is
+        # declared in the note itself, which is auditable, rather than with this flag:
+        # `notecheck_sections:` for bench sections, a notecheck:off block for a paragraph
+        # quoting an external source, `notecheck_ignore:` for a standing non-result.
         _do(execute, f"BLOCKED — {note_drift} unsourced number(s) in the note")
-        print("      ! not committing. Fix the numbers, add them to `notecheck_ignore:`")
-        print("        in the note frontmatter, or pass --allow-note-drift.")
+        print("      ! not committing. Fix the numbers. One that is not from the analysis is")
+        print("        declared in the note: `notecheck_sections:` in its frontmatter (check only")
+        print("        these headings), <!-- notecheck:off --> and <!-- notecheck:on --> around a")
+        print("        paragraph, or `notecheck_ignore:` for one value. --allow-note-drift overrides.")
     elif not data_dir or not is_git_repo(data_dir):
         _do(execute, "data_dir is not a git repo — skipping commit")
     elif not git_dirty(data_dir) and not execute:

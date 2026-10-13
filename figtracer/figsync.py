@@ -128,8 +128,7 @@ def _load_versions(analysis_dir: str, walk_up: bool = True) -> dict:
                     continue
                 ch = e.get("channel") or "note"  # missing/null -> note (back-compat)
                 e["_channel"] = ch
-                rel = e.get("rel_path")
-                e["_path"] = os.path.join(folder, rel) if rel else os.path.join(folder, e.get("fig", ""))
+                e["_path"] = _manifest.artefact_path(folder, e)
                 versions.setdefault((ch, t), []).append(e)
     return versions
 
@@ -178,14 +177,20 @@ def resolve_figures(analysis_dir: str, committed_only: bool = False,
 TABLE_ROWS_SHOWN = 50
 
 
-def resolve_tables(analysis_dir: str, walk_up: bool = True, channel: str = "note") -> dict:
-    """{title: newest table entry}, with `_path` and `_missing` set the way figures are."""
+def resolve_tables(analysis_dir: str, walk_up: bool = True, channel: str | None = "note") -> dict:
+    """{title: newest table entry}, with `_path` and `_missing` set the way figures are.
+
+    A note's table blocks are the "note" channel. `channel=None` takes a title from any
+    channel, newest first: a deck or Word document addresses a table by its title alone,
+    and a manuscript's table is saved with a channel of its own."""
     versions = _load_versions(analysis_dir, walk_up)
-    out = {}
+    pooled: dict = {}
     for (ch, t), vs in versions.items():
-        if ch != channel:
+        if channel is not None and ch != channel:
             continue
-        vs = [e for e in vs if _manifest.kind(e) == _manifest.TABLE]
+        pooled.setdefault(t, []).extend(e for e in vs if _manifest.kind(e) == _manifest.TABLE)
+    out = {}
+    for t, vs in pooled.items():
         if not vs:
             continue
         vs.sort(key=_key, reverse=True)
@@ -193,6 +198,120 @@ def resolve_tables(analysis_dir: str, walk_up: bool = True, channel: str = "note
         chosen["_missing"] = not os.path.exists(chosen["_path"])
         chosen["_n"] = len(vs)
         out[t] = chosen
+    return out
+
+
+# ── decks and Word documents ─────────────────────────────────────────────────
+# A deck (.pptx) or a Word document (.docx) is an embedding document like the note
+# (docs/DOCUMENTS.md). Its record is a `kind: deck|document` MANIFEST line with the file's
+# hash; what it embeds is read from the file, where each picture figtracer placed carries
+# the render it came from. `drift` compares those with the newest renders, `sync` replaces
+# a stale picture's pixels in place, and the provenance note lists where each figure sits.
+
+def resolve_documents(analysis_dir: str, walk_up: bool = True) -> dict:
+    """{title: newest deck or document record}, `_path` and `_missing` set, from this
+    scope's outputs/MANIFEST.jsonl. Empty when the scope has no outputs yet."""
+    from figtracer import embeds
+    try:
+        outputs = _outputs_dir(analysis_dir, walk_up)
+    except SystemExit:
+        return {}
+    return embeds.resolve_documents(outputs)
+
+
+def vault_resolver(eid: str, data_dir: str, walk_up: bool = True, config: str | None = None):
+    """A resolver for `embeds.embed_status` that sees this scope and, through
+    projects.yaml, any other experiment a cross-experiment deck draws on. An experiment
+    the vault does not know resolves to None and its embeds read UNKNOWN EXP."""
+    cache: dict = {}
+
+    def look(exp: str):
+        if exp in cache:
+            return cache[exp]
+        if exp == eid:
+            cache[exp] = (resolve_figures(data_dir, walk_up=walk_up),
+                          resolve_tables(data_dir, walk_up=walk_up, channel=None))
+            return cache[exp]
+        try:
+            cfg = lkconfig.load(config) if config else lkconfig.load()
+            other = resolve(cfg, exp=exp)
+            d = os.path.abspath(os.path.expanduser(other["data_dir"]))
+            cache[exp] = (resolve_figures(d), resolve_tables(d, channel=None))
+        except (Exception, SystemExit):
+            cache[exp] = None
+        return cache[exp]
+    return look
+
+
+def document_refs(documents: dict, eid: str) -> dict:
+    """{figure title: ["deck:<title> slide 4", ...]} for this scope's figures, from the
+    tags inside each recorded file that is on disk. The provenance note's "embedded in"."""
+    from figtracer import ooxml
+    refs: dict[str, list[str]] = {}
+    for t, e in sorted(documents.items()):
+        if e.get("_missing") or not os.path.exists(e["_path"]):
+            continue
+        try:
+            doc = ooxml.read(e["_path"])
+        except Exception:
+            continue
+        for p in doc.tagged_pictures():
+            if p.tag.get("exp") == eid:
+                refs.setdefault(p.tag["title"], []).append(f"{_manifest.kind(e)}:{t} {doc.unit_label(p.unit)}")
+    return refs
+
+
+def materialize_documents(documents: dict, resolver, eid: str, outputs: str, execute: bool = False,
+                          dpi: int = 300, backup_docx: bool = True) -> dict:
+    """The document counterpart of `materialize`: every tagged picture whose render is no
+    longer the newest of its title gets the newest one, in place, and the file is recorded
+    again with its new hash. A stale table, a dangling title and an untracked picture are
+    reported, never rewritten: a deck is rebuilt by its generator, a manuscript is edited
+    by its authors. A file open in its application is left alone and reported. A Word
+    document is copied to `archive/` beside it before its first write (`backup_docx`); a
+    deck, rebuilt from its generator, is not."""
+    from figtracer import embeds, ooxml
+    out: dict = {"synced": [], "current": [], "locked": [], "missing": [], "reported": [], "failed": [],
+                 "backups": []}
+    for t in sorted(documents):
+        e = documents[t]
+        if e.get("_missing") or not os.path.exists(e["_path"]):
+            out["missing"].append(t)
+            continue
+        if ooxml.locked(e["_path"]):
+            out["locked"].append(t)
+            continue
+        rows = embeds.embed_status(ooxml.read(e["_path"]), resolver)
+        stale = [r for r in rows if r["kind"] == "figure" and r["state"] == embeds.STALE]
+        for r in rows:
+            if (r["kind"] == "table" and r["state"] == embeds.STALE) or r["state"] == embeds.DANGLING:
+                out["reported"].append((t, r["where"], r["kind"], r["state"], r.get("title")))
+        if not stale:
+            out["current"].append(t)
+            continue
+        done = []
+        if execute:
+            backup = backup_docx and _manifest.kind(e) == _manifest.DOCUMENT
+            for r in stale:
+                try:
+                    rep = embeds.refresh_picture(e["_path"], r["picture"], r["entry"], dpi=dpi,
+                                                 backup=backup)
+                except Exception as exc:          # one bad picture must not abort the sync
+                    out["failed"].append((t, r["where"], str(exc)))
+                    continue
+                if rep.get("skipped"):
+                    out["failed"].append((t, r["where"], rep["skipped"]))
+                    continue
+                if rep.get("backup"):
+                    out["backups"].append((t, rep["backup"]))
+                    backup = False                # one copy per file per sync
+                done.append((r["where"], r["title"]))
+            if done:
+                embeds.record(e["_path"], outputs=outputs, title=t, scope=eid, generator=e.get("generator"),
+                              tool="figtracer.figsync", verb="Synced")
+        else:
+            done = [(r["where"], r["title"]) for r in stale]
+        out["synced"].append((t, done))
     return out
 
 
@@ -242,11 +361,15 @@ def _upsert_table(text: str, eid: str, title: str, body: str) -> tuple[str, bool
     """Replace the block for (eid, title) in `text`, or insert it before `# Log`.
     Returns (new text, changed)."""
     begin, end = _table_markers(eid, title)
-    block = f"{begin}\n{body}\n{end}"
+    # Blank lines between the markers and the table: Obsidian reads a table that starts on the
+    # line straight after an HTML comment as paragraph text and shows the raw pipes. Blocks
+    # written before this compare as changed, so the next sync rewrites them.
+    inner = f"\n\n{body}\n\n"
+    block = f"{begin}{inner}{end}"
     if begin in text and end in text:
         pre, rest = text.split(begin, 1)
         old, post = rest.split(end, 1)
-        if old.strip("\n") == body:
+        if old == inner:
             return text, False
         return pre + block + post, True
     insert = "\n" + block + "\n"
@@ -420,12 +543,26 @@ def cmd_index(figs: dict) -> None:
 UNPLACED_SHOWN = 15
 
 
+def _split_unplaced(figs: dict, ref: dict) -> tuple[list, list]:
+    """embed=TRUE titles in no note, as (unplaced, no_render).
+
+    UNPLACED means there is something to place: a registered render of the title is
+    still on disk. MANIFEST is append-only, so a title keeps its lines after every
+    render of it has gone (a figure no chunk makes any more, cleared out by hand);
+    `resolve_figures` marks that `_missing`. Those titles are history, not work
+    outstanding, and counting them made drift report "10 unplaced" on an experiment
+    where seven of the ten had no file left to place."""
+    loose = sorted(t for t, e in figs.items() if e.get("embed") and t not in ref)
+    return ([t for t in loose if not figs[t].get("_missing")],
+            [t for t in loose if figs[t].get("_missing")])
+
+
 def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
               attach: str | None = None, show_all: bool = False,
-              tables: dict | None = None) -> None:
+              tables: dict | None = None, documents: dict | None = None,
+              resolver=None) -> None:
     ref = _note_embeds(eid, notes)
     titles = set(figs)
-    embed_titles = {t for t, e in figs.items() if e.get("embed")}
     awaiting = orphan = not_mat = stale = 0
     print("== note embeds -> figure ==")
     for slug in sorted(ref):
@@ -482,7 +619,28 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
         if unplaced_t:
             print(f"  unplaced tables ({len(unplaced_t)}): "
                   f"{', '.join(unplaced_t[:UNPLACED_SHOWN])}")
-    unplaced = sorted(embed_titles - set(ref))
+    doc_behind = 0
+    if documents:
+        from figtracer import embeds, ooxml
+        print("\n== decks and documents -> figure / table ==")
+        for t in sorted(documents):
+            e = documents[t]
+            fstate = embeds.file_status(e)
+            print(f"  [{fstate}]  {t}  ({e.get('fig')}, {_manifest.kind(e)}, {e.get('saved_at', '')[:16]})")
+            if fstate == "MISSING":
+                doc_behind += 1
+                continue
+            for row in embeds.embed_status(ooxml.read(e["_path"]), resolver):
+                if row["state"] == embeds.OK:
+                    continue
+                label = f"{row['state']} {row['kind'].upper()}"
+                what = f"{row['exp']}:{row['title']}" if row.get("title") else row.get("detail", "")
+                detail = f"  ({row['detail']})" if row.get("detail") and row.get("title") else ""
+                hint = "  — run figsync sync" if (row["kind"] == "figure" and row["state"] == embeds.STALE) else ""
+                print(f"      [{label}]  {row['where']}  {what}{detail}{hint}")
+                if row["state"] in (embeds.STALE, embeds.DANGLING):
+                    doc_behind += 1
+    unplaced, no_render = _split_unplaced(figs, ref)
     print(f"\n== embed=TRUE figures (in MANIFEST) not placed in any note ({len(unplaced)}) ==")
     # A notebook that loops f2() over conditions leaves hundreds of embed=TRUE titles
     # nobody will place (129 on one experiment), and they buried the three lines above
@@ -492,9 +650,17 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
         print(f"  UNPLACED  {t}")
     if len(shown) < len(unplaced):
         print(f"  … and {len(unplaced) - len(shown)} more (pass --all to list them)")
+    if no_render and show_all:
+        print(f"\n== embed=TRUE titles in MANIFEST with no render on disk ({len(no_render)}) ==")
+        for t in no_render:
+            print(f"  NO RENDER  {t}")
+    gone = (f"; {len(no_render)} with no render on disk (nothing to place"
+            f"{'' if show_all else ', --all lists them'})") if no_render else ""
+    docs = (f"; {len(documents)} deck(s)/document(s), {doc_behind} embed(s) behind"
+            if documents else "")
     print(f"\nsummary: {len(ref)} embeds — {stale} STALE (run sync), {awaiting} awaiting re-run, "
           f"{not_mat} not materialised (run sync), "
-          f"{orphan} orphaned (no registered source), {len(unplaced)} unplaced")
+          f"{orphan} orphaned (no registered source), {len(unplaced)} unplaced{gone}{docs}")
 
 
 def _attachment_name(eid: str, title: str, channel: str = "note") -> str:
@@ -517,14 +683,16 @@ def _rasterize(src: str, dst: str, dpi: int = 300) -> None:
         return
     if not low.endswith(".pdf"):
         raise ValueError(f"can't rasterize non-SVG/PDF/PNG source: {src}")
-    stem = dst[:-4] if dst.lower().endswith(".png") else dst
-    subprocess.run(["pdftoppm", "-r", str(dpi), "-png", "-singlefile", src, stem], check=True)
+    from figtools import rasterise
+    rasterise.rasterise_pdf(src, dst, dpi=dpi)
 
 
 def _write_provenance(eid: str, note_dir: str, mat: dict, ref: dict | None = None,
-                      tables: dict | None = None, tref: dict | None = None) -> str:
+                      tables: dict | None = None, tref: dict | None = None,
+                      documents: dict | None = None, doc_refs: dict | None = None) -> str:
     ref = ref or {}
     tables, tref = tables or {}, tref or {}
+    documents, doc_refs = documents or {}, doc_refs or {}
     out = os.path.join(note_dir, f"{eid} — Figure provenance (auto).md")
     # `title:` so Obsidian front-matter-title plugins show a readable name in the explorer
     # instead of the raw filename. Deliberately NO `experiment_id` — that key is what marks a
@@ -539,7 +707,8 @@ def _write_provenance(eid: str, note_dir: str, mat: dict, ref: dict | None = Non
              "| --- | --- | --- | --- | --- | --- | --- |"]
     for t in sorted(mat):
         e = mat[t]
-        where = ", ".join(f"[[{os.path.splitext(n)[0]}]]" for n in sorted(set(ref.get(t, [])))) or "—"
+        places = [f"[[{os.path.splitext(n)[0]}]]" for n in sorted(set(ref.get(t, [])))] + doc_refs.get(t, [])
+        where = ", ".join(places) or "—"
         source = e.get("source_path") or e.get("qmd_path") or "—"
         if e.get("source_kind"):
             source += f" ({e['source_kind']})"
@@ -558,6 +727,21 @@ def _write_provenance(eid: str, note_dir: str, mat: dict, ref: dict | None = Non
                          f"{e.get('saved_at', '')} | `{e.get('git_commit') or '-'}` | "
                          f"{e.get('qmd_path') or '—'} | `{e.get('chunk_label') or '-'}` | "
                          f"{e.get('n_rows', '—')} |")
+    if documents:
+        lines += ["", "## Decks and documents", "",
+                  "> Each row is a file that leaves the lab, recorded with its hash. The figure rows",
+                  "> above say where in it each figure sits.", "",
+                  "| file | kind | title | built or synced | git commit | generator | units | figures | tables |",
+                  "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+        for t in sorted(documents):
+            e = documents[t]
+            srcs = e.get("sources") or []
+            n_fig = sum(1 for s in srcs if s.get("kind") == "figure")
+            lines.append(f"| `{e.get('fig') or os.path.basename(e.get('_path', ''))}`"
+                         f"{' (missing)' if e.get('_missing') else ''} | {_manifest.kind(e)} | {t} | "
+                         f"{e.get('saved_at', '')} | `{e.get('git_commit') or '-'}` | "
+                         f"`{e.get('generator') or '-'}` | {e.get('n_units', '—')} | {n_fig} | "
+                         f"{len(srcs) - n_fig} |")
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return out
@@ -574,7 +758,8 @@ def _is_current(attachment: str, render: str) -> bool:
 
 
 def materialize(figs, eid, note_dir, attach, notes, dpi=300, execute=False,
-                channel="note", force=False, tables=None, tref=None) -> dict:
+                channel="note", force=False, tables=None, tref=None,
+                documents=None, doc_refs=None) -> dict:
     """Core sync step (reusable by `figtracer sync`). Rasterizes the latest render
     of each figure that is BOTH embed=TRUE AND referenced in a note, overwriting
     the stable attachment PNG (`<eid>_<title>.png` for the note channel), and
@@ -588,7 +773,7 @@ def materialize(figs, eid, note_dir, attach, notes, dpi=300, execute=False,
     """
     ref = _note_embeds(eid, notes)
     targets = sorted(t for t, e in figs.items() if e.get("embed") and t in ref)
-    unplaced = sorted(t for t, e in figs.items() if e.get("embed") and t not in ref)
+    unplaced, _ = _split_unplaced(figs, ref)
     if execute and targets:
         os.makedirs(attach, exist_ok=True)
     synced, current, missing, failed, mat = [], [], [], [], {}
@@ -612,21 +797,47 @@ def materialize(figs, eid, note_dir, attach, notes, dpi=300, execute=False,
         synced.append(t)
     # write provenance whenever there are targets (so it never goes stale), even
     # if some skipped — it reflects what's actually materialized right now.
-    prov = (_write_provenance(eid, note_dir, mat, ref, tables, tref)
-            if ((targets or tables) and execute) else None)
+    prov = (_write_provenance(eid, note_dir, mat, ref, tables, tref, documents, doc_refs)
+            if ((targets or tables or documents) and execute) else None)
     return {"synced": synced, "current": current, "missing": missing, "failed": failed,
             "unplaced": unplaced, "provenance": prov}
 
 
+def print_document_sync(d: dict, execute: bool) -> None:
+    """The lines `cmd_sync` and `figtracer sync` print for `materialize_documents`."""
+    verb = "refreshed" if execute else "would refresh"
+    for t, done in d["synced"]:
+        print(f"  {verb} {len(done)} figure(s) in {t}: "
+              + ", ".join(f"{where} {title}" for where, title in done)
+              + ("; re-recorded" if execute else ""))
+    for t, where in d.get("backups", []):
+        print(f"  copied {t} to {os.path.relpath(where, os.path.dirname(os.path.dirname(where)))} first")
+    if d["current"]:
+        print(f"  {len(d['current'])} deck(s)/document(s) current")
+    for t in d["locked"]:
+        print(f"  SKIP {t}: open in its application (lock file present)")
+    for t in d["missing"]:
+        print(f"  SKIP {t}: recorded file is missing")
+    for t, where, kind, state, title in d["reported"]:
+        print(f"  note: {t} {where}: {state} {kind} {title or ''} (rebuild the deck or edit the document)")
+    for t, where, err in d["failed"]:
+        print(f"  FAIL {t} {where}: {err}")
+
+
 def cmd_sync(figs, eid, attach, note_dir, notes, dpi, execute, force=False,
-             tables: dict | None = None) -> int:
+             tables: dict | None = None, documents: dict | None = None, resolver=None,
+             outputs: str | None = None) -> int:
     tr = placed = tref = None
     if tables is not None:
         tr = materialize_tables(tables, eid, notes, execute=execute)
         tref = _note_tables(eid, notes)
         placed = {t: tables[t] for t in tr["synced"] + tr["current"]}
+    dres = None
+    if documents:
+        dres = materialize_documents(documents, resolver, eid, outputs, execute=execute, dpi=dpi)
     r = materialize(figs, eid, note_dir, attach, notes, dpi, execute, force=force,
-                    tables=placed, tref=tref)
+                    tables=placed, tref=tref, documents=documents,
+                    doc_refs=document_refs(documents, eid) if documents else None)
     if tr is not None:
         verb = "rewrote" if execute else "would rewrite"
         for t in tr["synced"]:
@@ -658,6 +869,8 @@ def cmd_sync(figs, eid, attach, note_dir, notes, dpi, execute, force=False,
         print(f"  note: {len(r['unplaced'])} embed=TRUE figure(s) not in any note (skipped): "
               f"{', '.join(shown)}"
               + (f", … and {more} more (`figsync drift --all` lists them)" if more else ""))
+    if dres is not None:
+        print_document_sync(dres, execute)
     if r["provenance"]:
         print(f"  provenance -> {os.path.basename(r['provenance'])}")
     return 0
@@ -681,7 +894,8 @@ def cmd_place(args, eid, qmd, figs, notes) -> int:
                   f"  known tables: {', '.join(sorted(t for t, x in tables.items() if not x.get('_missing'))) or '(none)'}",
                   file=sys.stderr)
             return 2
-        block = "{begin}\n{body}\n{end}".format(
+        # Same layout as _upsert_table, blank lines included, so sync sees it as current.
+        block = "{begin}\n\n{body}\n\n{end}".format(
             begin=_table_markers(eid, title)[0], end=_table_markers(eid, title)[1],
             body=_table_body(e["_path"]))
         known = set(tables)
@@ -847,6 +1061,10 @@ def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False,
     versions = _load_versions(analysis_dir, walk_up)
     drop, per_title = [], []
     for (ch, t), vs in versions.items():
+        # A deck or a Word document is overwritten where it lives and recorded on every
+        # build; its older records name numbered siblings a person chose to keep. Never
+        # a render to age out.
+        vs = [e for e in vs if _manifest.kind(e) not in _manifest.EMBEDDING_KINDS]
         on_disk = [e for e in vs if os.path.exists(e["_path"])]
         on_disk.sort(key=_key, reverse=True)
         seen, renders = set(), []
@@ -935,15 +1153,20 @@ def main(argv=None) -> int:
                          "already newer than its render (needed after a --dpi change)")
     ap.add_argument("--all", action="store_true", dest="show_all",
                     help="drift: list every unplaced title instead of the first "
-                         f"{UNPLACED_SHOWN}")
+                         f"{UNPLACED_SHOWN}, and name the titles with no render on disk")
+    ap.add_argument("--no-documents", action="store_true",
+                    help="leave recorded decks and Word documents out of index, drift and sync")
     ap.add_argument("-y", "--yes", action="store_true", help="execute (sync/place/prune default to a dry run)")
     args = ap.parse_args(argv)
 
     eid, data_dir, note_dir, attach, notes, qmd, walk_up = _paths(args)
     figs = resolve_figures(data_dir, committed_only=args.committed_only, walk_up=walk_up)
     tables = resolve_tables(data_dir, walk_up=walk_up)
+    documents = {} if args.no_documents else resolve_documents(data_dir, walk_up=walk_up)
+    resolver = vault_resolver(eid, data_dir, walk_up, args.config) if documents else None
     scope = "project" if args.project else "experiment"
-    print(f"{scope} {eid} — {len(figs)} figure title(s), {len(tables)} table(s) in MANIFEST(s); "
+    docs_n = f", {len(documents)} deck(s)/document(s)" if documents else ""
+    print(f"{scope} {eid} — {len(figs)} figure title(s), {len(tables)} table(s){docs_n} in MANIFEST(s); "
           f"{len(notes)} note(s)\n")
 
     if args.action == "index":
@@ -953,10 +1176,15 @@ def main(argv=None) -> int:
             print(f"{e.get('saved_at', ''):26} TABLE v{e['_n']:<2} "
                   f"{(e.get('git_commit') or '-')[:8]:8} {t}"
                   f"{'  (NO on-disk CSV)' if e.get('_missing') else ''}")
+        for t in sorted(documents):
+            e = documents[t]
+            print(f"{e.get('saved_at', ''):26} {_manifest.kind(e).upper():5} "
+                  f"{(e.get('git_commit') or '-')[:8]:8} {t}  ({e.get('fig')}, {e.get('n_units', '?')} units)"
+                  f"{'  (NO file on disk)' if e.get('_missing') else ''}")
         return 0
     if args.action == "drift":
         cmd_drift(figs, eid, notes, _qmd_embed_titles(qmd), attach, show_all=args.show_all,
-                  tables=tables)
+                  tables=tables, documents=documents, resolver=resolver)
         return 0
     if args.action == "place":
         args._tables = tables
@@ -966,7 +1194,8 @@ def main(argv=None) -> int:
     if args.action == "prune":
         return cmd_prune(data_dir, args.keep, args.yes, walk_up)
     return cmd_sync(figs, eid, attach, note_dir, notes, args.dpi, args.yes, force=args.force,
-                    tables=tables)
+                    tables=tables, documents=documents, resolver=resolver,
+                    outputs=_outputs_dir(data_dir, walk_up) if documents else None)
 
 
 if __name__ == "__main__":

@@ -8,9 +8,9 @@ Six writers produce it: seekit's `f2()`, `saveFig()` and `saveTable()`; the bund
 
 | field | required | meaning |
 |---|---|---|
-| `kind` | no | `figure` (the default when absent) or `table` |
+| `kind` | no | `figure` (the default when absent), `table`, `deck` (a `.pptx`) or `document` (a `.docx`) |
 | `title` | yes | the stable identity a note resolves by; filename-safe; the same title appended again is a newer version |
-| `rel_path` | yes | path of the artefact relative to `outputs/`. A figure sits in a dated subfolder (`2026-09-14_<notebook>/<stamp>_<title>.pdf`); a table sits at the root (`<title>.csv`) and is overwritten in place |
+| `rel_path` | yes | path of the artefact relative to `outputs/`. A figure sits in a dated subfolder (`2026-09-14_<notebook>/<stamp>_<title>.pdf`); a table sits at the root (`<title>.csv`) and is overwritten in place; a deck or document is the one kind whose path climbs out of `outputs/` (`../deck/<file>.pptx`, `../manuscript/<file>.docx`), because it lives beside its generator or with its authors. Every reader resolves the path with `manifest.artefact_path()` |
 | `fig` | yes | historical duplicate of `rel_path`; readers fall back to it |
 | `channel` | no | `note` (default) for a lab-note artefact; `panel` for a figtools panel export. A panel can never shadow a note figure of the same title |
 | `embed` | no | `true` marks it for `figsync` to place and sync |
@@ -22,7 +22,8 @@ Six writers produce it: seekit's `f2()`, `saveFig()` and `saveTable()`; the bund
 | `git_commit`, `git_branch` | no | the notebook repository at the moment of writing |
 | `width_in`, `height_in` | figures | size in inches |
 | `n_rows`, `n_cols`, `columns` | tables | shape, so a note can say what it embeds |
-| `source_path`, `source_kind`, `generator` | registered files | where a non-notebook artefact came from |
+| `sha256`, `n_units`, `sources` | decks and documents | the file's hash at the moment of the record, its slide or paragraph count, and the figures and tables it embeds, each as `{"kind", "exp", "title", "rel_path", "saved_at"}` or `{"kind", "exp", "title", "sha256"}` |
+| `source_path`, `source_kind`, `generator` | registered files, decks and documents | where a non-notebook artefact came from; for a deck the generator command (`deck/build.py --full`) |
 | `r_version`, `py_version`, `tool` | no | environment |
 
 ## `saved_at` has three spellings, and readers must not compare them as strings
@@ -35,9 +36,12 @@ R writes `2026-09-14T10:22:31+0900`; Python writes `2026-09-14T10:22:31.482115`;
 
 **table.** Written by `saveTable()` / `savetable()` to `outputs/<title>.csv` at the root, overwritten in place, so the file is current by construction. That is the same contract `figtracer notecheck` builds its number corpus on, so a number in a synced table is sourced by name. `figsync place --table <title>` writes the table into a note between `<!-- figtracer:table <exp>:<title>:begin -->` and `:end -->` markers, and `figsync sync` regenerates what sits between them from the current CSV. Prose around the markers is never touched. `figrun` verifies a table it wrote by reading it against the entry's own record. The entry must point at `<title>.csv` at the root of `outputs/`, exactly (a `fig_format`, when present, must be `csv`), and must carry `n_rows`, `n_cols` and `columns`. The file's header row must be `columns` as `write.csv` writes them. That is usually `columns` exactly. A column holding a matrix or data frame of more than one column (`aggregate()` with a `FUN` that returns a vector, or `df$stats <- data.frame(a, b)`) is written as one cell per sub-column, named `<name>.<sub-name>` or `<name>.1`, `<name>.2`, while `saveTable()` records `names(df)` and `ncol(df)`, so each recorded name may instead appear as a run of two or more cells starting `<name>.`, in order and with no cell left over. The file must hold exactly `n_rows` data records, each as wide as the header, with no NUL byte, strict CSV quoting to the end and a newline after the last record, as `write.csv` writes it. A table with no columns fails; a header-only table passes. Two writer spellings are accepted: the bundled shim writes a one-column table's `columns` as a bare string, and seekit writes an `NA` column name as `null` where the file says `NA`. The file is read as UTF-8 (a byte-order mark is accepted) and otherwise as Latin-1, because `write.csv` writes the R session's native encoding. `kind: table` alone is not enough, because a blank SVG render is text and would otherwise read as a one-column CSV. The size floor `figrun` applies to a figure render (under 4,000 bytes is taken to be a blank device) does not apply, because a correct table of a few rows is a couple of hundred bytes. Every entry a run wrote is checked, not only the last one of each title; when a run saves one table title more than once, only the newest of those entries is read against the file, because each save overwrote it.
 
+**deck** and **document.** A `.pptx` or a `.docx` is an embedding document like the note, and this is its build record: one line per build or sync, with the file's `sha256` at that moment, so a later check can say whether the file on disk is the recorded one. The file is overwritten in place where it lives; nothing is copied into `outputs/`. What the file embeds is read from the file itself (`figtracer/ooxml.py`): each picture or table placed by figtracer carries `figtracer:<exp>:<title>` and a JSON record of the exact render or CSV on its own shape properties, and `sources` summarises them so a reader can list a deck's figures without opening it. `figsync drift` compares the tags with the newest render of each title, `figsync sync` replaces a stale picture's pixels in place, and `notecheck` reads the numbers on every slide or paragraph. The commands that write these lines are `figtracer deck` and `figtracer document` (docs/DOCUMENTS.md).
+
 ## What a reader may assume
 
 - A title resolves to its newest entry whose file exists on disk; older entries are history and `figsync prune` may have removed their files.
 - An entry with no `kind` is a figure.
+- A `deck` or `document` entry is never pruned, never a panel, and never a figure to `fig doctor`; its `rel_path` may begin with `..`.
 - A malformed line is skipped, never fatal.
 - Nothing rewrites or deletes a line. History lives in the file and in git.

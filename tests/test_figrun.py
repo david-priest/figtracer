@@ -149,6 +149,34 @@ def test_duplicate_labels_are_fatal(tmp_path):
         figrun._dedupe(figrun.parse_chunks(qmd))
 
 
+def test_a_notebook_that_is_not_utf8_is_read_with_one_notice(tmp_path, monkeypatch, capsys):
+    """One Latin-1 byte in a comment ended every figrun command on that notebook with
+    a UnicodeDecodeError traceback."""
+    root, qmd = _write_qmd(tmp_path)
+    labels = [c.label for c in figrun.parse_chunks(qmd)]
+    assert capsys.readouterr().err == ""                 # a UTF-8 notebook says nothing
+
+    raw = QMD.encode("utf-8").replace(b"library(ggplot2)", b"library(ggplot2)  # \xb5m per pixel")
+    with open(qmd, "wb") as fh:
+        fh.write(raw)
+    bad_line = raw[:raw.index(b"\xb5")].count(b"\n") + 1
+    chunks = figrun.parse_chunks(qmd)
+    captured = capsys.readouterr()
+    (notice,) = captured.err.splitlines()
+    assert qmd in notice and "is not valid UTF-8" in notice
+    assert f"first invalid byte on line {bad_line})" in notice
+    assert captured.out == ""                            # stdout may be another command's JSON
+    assert [c.label for c in chunks] == labels
+    body = {c.label: c for c in chunks}["setup-packages"].body
+    assert body == "library(ggplot2)  # \ufffdm per pixel"
+
+    # and the command carries on
+    monkeypatch.setattr(figrun, "figrun_config", lambda: {})
+    monkeypatch.setattr(figrun, "_exp", lambda args: ("EXP1", qmd, root))
+    assert figrun.run(_args(list=True)) == 0
+    assert f"EXP1: {len(labels)} chunks" in capsys.readouterr().out
+
+
 # ── classification ────────────────────────────────────────────────────────────
 
 def test_a_comment_naming_an_expensive_call_does_not_reclassify(tmp_path):
@@ -162,6 +190,206 @@ def test_a_comment_naming_an_expensive_call_does_not_reclassify(tmp_path):
     assert by["reload-sce"].is_reload and not by["reload-sce"].is_expensive
     assert by["cell-counts"].is_figure and by["legacy-style"].is_figure
     assert not by["setup-packages"].is_figure
+
+
+# ── classification: a notebook that calls CATALYST directly ───────────────────
+
+CATALYST_CALLS = ["prepData", "computeSpillmat", "compCytof", "cluster", "runDR"]
+
+CATALYST_QMD = '''```{r}
+#| label: setup-packages
+library(CATALYST)
+library(cluster)
+```
+
+```{r}
+#| label: build
+sce_raw <- prepData(fs, panel, md)
+```
+
+```{r}
+#| label: spillover
+sce_beads <- computeSpillmat(sce_beads)
+```
+
+```{r}
+#| label: compensate
+sce <- CATALYST::compCytof(sce_raw, sm, method = "nnls", overwrite = TRUE)
+```
+
+```{r}
+#| label: cluster
+sce <- CATALYST::cluster(sce, features = "type", xdim = 10, ydim = 10,
+                         maxK = 20, seed = 1)
+```
+
+```{r}
+#| label: dr
+sce <- CATALYST::runDR(sce, dr = "UMAP", cells = 1000, features = "type")
+```
+
+```{r}
+#| label: reload-sce
+#| eval: false
+sce <- qs2::qs_read(file.path("saves", "sce.qs2"))
+```
+
+```{r}
+#| label: abundance
+# cluster(sce) is not re-run here: this chunk only reads the saved object.
+df <- data.frame(cluster = cluster_ids(sce, "meta20"), condition = sce$condition)
+n <- dplyr::count(df, cluster, condition)
+p <- ggplot(n, aes(cluster, n, fill = condition)) + geom_col() +
+  labs(x = "cluster (meta20)", y = "cells") +
+  scale_fill_manual(values = c(treated = "#E15759", control = "#4E79A7"))
+f2(p, h = 4, w = 6, "demo_abundance", embed = TRUE)
+```
+
+```{r cluster-sizes}
+print(table(cluster_ids(sce, "meta20")))
+```
+'''
+
+
+def test_strip_r_strings_removes_string_contents_and_keeps_the_code():
+    src = 'p <- p + labs(x = "cluster (meta20)", y = \'cells (n)\'); f2(p, "t")'
+    assert figrun.strip_r_strings(src) == 'p <- p + labs(x = "", y = \'\'); f2(p, "")'
+    assert figrun.strip_r_strings('s <- "a\\"b(c"; g(x)') == 's <- ""; g(x)'
+
+
+def test_strip_r_strings_leaves_a_line_with_an_unclosed_quote_alone():
+    """Quote tracking cannot be trusted on such a line, so nothing on it is removed
+    and a call after the end of a string begun on the line above stays visible."""
+    src = 'msg <- "first line\nsecond line"; qs_save(sce, f)'
+    assert figrun.strip_r_strings(src) == src
+    assert figrun.Chunk("x", src, {}, False, 1).is_expensive
+
+
+@pytest.mark.parametrize("prefix", ["", "CATALYST::"], ids=["bare", "namespaced"])
+@pytest.mark.parametrize("name", CATALYST_CALLS)
+def test_a_direct_catalyst_call_is_expensive(name, prefix):
+    """Only the `2` wrappers were listed, so a notebook that calls CATALYST itself had
+    its build, compensation, clustering and embedding chunks classed "setup"."""
+    assert name in figrun.DEFAULT_EXPENSIVE_CALLS
+    assert figrun.Chunk("x", f"sce <- {prefix}{name}(sce)", {}, False, 1).is_expensive
+
+
+@pytest.mark.parametrize("body", [
+    'sce <- cluster(sce, features = "type", maxK = 20)',
+    'sce <- CATALYST::cluster(\n  sce,\n  features = "type",\n  maxK = 20\n)',
+    'sce <- CATALYST:::cluster(sce)',
+    'sce <- cluster (sce)',
+    'sce <- sce |> cluster(features = "type")',
+    'sce <- sce %>%\n  CATALYST::cluster(features = "type")',
+    'message("clustering"); sce <- cluster(sce)',
+    'cols <- c(treated = "#E15759"); sce <- cluster(sce)',
+    'if (RECLUSTER) sce <- cluster(sce)  # cluster_ids() reads it back',
+], ids=["bare", "arguments-over-lines", "triple-colon", "space-before-paren", "native-pipe",
+        "magrittr-pipe", "after-a-string", "after-a-colour-literal", "before-a-comment"])
+def test_a_call_to_cluster_is_expensive_however_it_is_written(body):
+    assert figrun.Chunk("x", body, {}, False, 1).is_expensive
+
+
+@pytest.mark.parametrize("body", [
+    'ids <- cluster_ids(sce, "meta20")',
+    'ids <- CATALYST::cluster_ids(sce, "meta20")',
+    'codes <- cluster_codes(sce)',
+    'pal <- cluster_palette(20)',
+    'p <- plotClusterExprs2(sce, k = "meta20")',
+    'n <- dplyr::count(df, cluster, condition)',
+    'df <- merge(df, labels, by = "cluster")',
+    'df$cluster <- factor(df$cluster)',
+    'df <- dplyr::mutate(df, cluster = factor(cluster))',
+    'p <- ggplot(df, aes(cluster, n)) + facet_wrap(~ cluster)',
+    'f <- function(cluster) table(cluster)',
+    'cluster <- "meta20"',
+    'x <- 1  # then cluster(sce) and CATALYST::cluster(sce) in the session',
+    'p <- p + labs(x = "cluster (meta20)")',
+    "message('re-run cluster(sce) in the session')",
+    'cat(sprintf("%d cells in %d cluster(s)\\n", n, k))',
+    'library(cluster)',
+    'fit <- cluster::pam(d, 4)',
+    'n <- n_per_cluster(df)',
+    'res <- clusterApply(cl, xs, f)',
+], ids=["cluster_ids", "namespaced-cluster_ids", "cluster_codes", "cluster_palette",
+        "plotClusterExprs2", "count-column", "by-string", "dollar-column", "mutate-argument",
+        "aes-and-formula", "function-argument", "variable", "comment", "axis-label-with-paren",
+        "single-quoted-string", "sprintf-format", "library", "namespace-of-another-package",
+        "name-ending-in-_cluster", "name-starting-with-cluster"])
+def test_a_look_alike_of_cluster_is_not_a_call(body):
+    """`cluster` is an ordinary word and a common column name. None of these builds or
+    changes the object, so none may make its chunk expensive."""
+    assert not figrun.Chunk("x", body, {}, False, 1).is_expensive
+
+
+@pytest.mark.parametrize("header", ["```{r}\n#| label: cluster", "```{r cluster}"],
+                         ids=["magic-comment", "inline"])
+def test_a_chunk_labelled_cluster_that_only_reads_is_not_expensive(tmp_path, header):
+    _, qmd = _write_qmd(tmp_path, header + '\nprint(table(cluster_ids(sce, "meta20")))\n```\n')
+    (chunk,) = figrun.parse_chunks(qmd)
+    assert chunk.label == "cluster" and not chunk.is_expensive
+
+
+def test_the_catalyst_names_do_not_match_their_neighbours(restore_config):
+    """mergeClusters( and the `2` wrappers are expensive under their own entries. With
+    only the CATALYST names configured, `cluster` must match neither mergeClusters(
+    nor cluster2(, and `prepData` must not match prepData2(."""
+    neighbours = ['sce <- mergeClusters(sce, k = "meta20", table = tab, id = "merging1")',
+                  "sce <- prepData2(fs)", "sce <- compCytof2(sce, sm)",
+                  "sce <- cluster2(sce)", "sce <- runDR2(sce)"]
+    figrun.apply_config({"expensive_calls": CATALYST_CALLS})
+    for body in neighbours:
+        assert not figrun.Chunk("x", body, {}, False, 1).is_expensive, body
+    figrun.apply_config({})
+    for body in neighbours:
+        assert figrun.Chunk("x", body, {}, False, 1).is_expensive, body
+
+
+def test_a_catalyst_notebook_separates_object_chunks_from_reading_chunks(tmp_path, capsys):
+    root, qmd = _write_qmd(tmp_path, CATALYST_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    by = {c.label: c for c in chunks}
+    assert [c.label for c in chunks if c.is_expensive] == \
+        ["build", "spillover", "compensate", "cluster", "dr"]
+    # reading the clustering back, counting by it and labelling an axis with it
+    assert by["abundance"].is_figure and not by["abundance"].is_expensive
+    assert not by["cluster-sizes"].is_expensive
+    assert not by["setup-packages"].is_expensive        # library(cluster) attaches a package
+    assert by["reload-sce"].is_reload
+    figrun.cmd_list(chunks, root, "EXP1")
+    rows = [line.split() for line in capsys.readouterr().out.splitlines()]
+    kinds = {r[0]: r[1] for r in rows if len(r) >= 2 and r[0] in by}
+    assert kinds["cluster"] == "expensive" and kinds["dr"] == "expensive"
+    assert kinds["abundance"] == "figure" and kinds["cluster-sizes"] == "setup"
+
+
+def test_a_figure_target_never_pulls_in_a_catalyst_chunk(tmp_path):
+    root, qmd = _write_qmd(tmp_path, CATALYST_QMD)
+    chunks = figrun.parse_chunks(qmd)
+    plan, _ = figrun.build_plan(chunks, ["abundance"], [], qmd, root)
+    assert plan["skip"] == ["build", "spillover", "compensate", "cluster", "dr"]
+    assert plan["bootstrap"] == ["setup-packages"]
+    # naming the clustering un-skips it alone, as for the wrappers
+    plan, _ = figrun.build_plan(chunks, ["cluster"], ["cluster"], qmd, root)
+    assert plan["skip"] == ["build", "spillover", "compensate", "dr"]
+
+
+@pytest.mark.parametrize("label", ["build", "spillover", "compensate", "cluster", "dr"])
+def test_run_refuses_a_catalyst_chunk_as_a_target_without_allow_expensive(
+        tmp_path, monkeypatch, label):
+    """`figrun --exp EXP1 cluster` on a notebook whose cluster chunk calls
+    CATALYST::cluster( ran the clustering without the flag."""
+    root, qmd = _write_qmd(tmp_path, CATALYST_QMD)
+    monkeypatch.setattr(figrun, "figrun_config", lambda: {})
+    monkeypatch.setattr(figrun, "_exp", lambda args: ("EXP1", qmd, root))
+    monkeypatch.setenv("FIGRUN_SCRATCH", str(tmp_path / "scratch"))
+
+    def no_r(*a, **kw):
+        raise AssertionError("figrun went on to launch R")
+    monkeypatch.setattr(figrun.subprocess, "call", no_r)
+    with pytest.raises(SystemExit, match="--allow-expensive") as refused:
+        figrun.run(_args(labels=[label], list=False))
+    assert str(refused.value).startswith(f"figrun: {label} rebuild")
 
 
 # ── titles ────────────────────────────────────────────────────────────────────
@@ -879,6 +1107,80 @@ def test_call_lists_come_from_config(restore_config):
     figrun.apply_config({})
     assert figrun.EXPENSIVE_CALLS == figrun.DEFAULT_EXPENSIVE_CALLS
     assert figrun.RELOAD_CALLS == figrun.DEFAULT_RELOAD_CALLS
+
+
+def test_expensive_calls_extra_adds_to_the_defaults(restore_config):
+    seurat = figrun.Chunk("c", "seu <- FindClusters(seu)", {}, False, 1)
+    cytof = figrun.Chunk("k", "sce <- CATALYST::cluster(sce)", {}, False, 1)
+    # a name already on the list is not added twice
+    figrun.apply_config({"expensive_calls_extra": ["FindClusters", "qs_save", "FindClusters"]})
+    assert figrun.EXPENSIVE_CALLS == figrun.DEFAULT_EXPENSIVE_CALLS + ("FindClusters",)
+    assert seurat.is_expensive and cytof.is_expensive
+    assert figrun.unguarded_defaults() == []
+    # one name may be given as a string, as for the other keys
+    figrun.apply_config({"expensive_calls_extra": "FindClusters"})
+    assert figrun.EXPENSIVE_CALLS == figrun.DEFAULT_EXPENSIVE_CALLS + ("FindClusters",)
+
+
+def test_expensive_calls_still_replaces_and_extra_adds_to_what_it_leaves(restore_config):
+    seurat = figrun.Chunk("c", "seu <- FindClusters(seu)", {}, False, 1)
+    cytof = figrun.Chunk("k", "sce <- CATALYST::cluster(sce)", {}, False, 1)
+    figrun.apply_config({"expensive_calls": ["FindClusters"]})
+    assert figrun.EXPENSIVE_CALLS == ("FindClusters",)
+    assert seurat.is_expensive and not cytof.is_expensive
+    assert figrun.unguarded_defaults() == list(figrun.DEFAULT_EXPENSIVE_CALLS)
+    figrun.apply_config({"expensive_calls": ["FindClusters"],
+                         "expensive_calls_extra": ["cluster", "qs_save"]})
+    assert figrun.EXPENSIVE_CALLS == ("FindClusters", "cluster", "qs_save")
+    assert seurat.is_expensive and cytof.is_expensive
+    assert figrun.unguarded_defaults() == [c for c in figrun.DEFAULT_EXPENSIVE_CALLS
+                                           if c not in ("cluster", "qs_save")]
+
+
+@pytest.mark.parametrize("fc, dropped", [
+    ({}, None),
+    ({"expensive_calls_extra": ["FindClusters"]}, None),
+    ({"expensive_calls": list(figrun.DEFAULT_EXPENSIVE_CALLS) + ["FindClusters"]}, None),
+    ({"expensive_calls": ["FindClusters"],
+      "expensive_calls_extra": list(figrun.DEFAULT_EXPENSIVE_CALLS)}, None),
+    ({"expensive_calls": ["FindClusters"]}, list(figrun.DEFAULT_EXPENSIVE_CALLS)),
+    ({"expensive_calls": [c for c in figrun.DEFAULT_EXPENSIVE_CALLS if c != "cluster"]},
+     ["cluster"]),
+], ids=["no-config", "extra-only", "replaced-with-every-default", "defaults-restored-by-extra",
+        "replaced-by-one-name", "one-default-left-out"])
+def test_list_names_the_defaults_a_configured_list_no_longer_guards(
+        tmp_path, monkeypatch, capsys, restore_config, fc, dropped):
+    """`expensive_calls: [FindClusters]` reads as "also guard FindClusters" and drops
+    every default. The notice appears only when a default really is left out."""
+    root, qmd = _write_qmd(tmp_path)
+    monkeypatch.setattr(figrun, "figrun_config", lambda: fc)
+    monkeypatch.setattr(figrun, "_exp", lambda args: ("EXP1", qmd, root))
+    assert figrun.run(_args(list=True)) == 0
+    captured = capsys.readouterr()
+    assert "EXP1: 9 chunks" in captured.out
+    if dropped is None:
+        assert captured.err == ""
+    else:
+        (notice,) = captured.err.splitlines()
+        assert "expensive_calls in " in notice and "replaces the default list" in notice
+        assert f"are not guarded: {', '.join(dropped)} (" in notice
+
+
+def test_a_run_names_the_unguarded_defaults_before_it_starts(tmp_path, monkeypatch, capsys,
+                                                             restore_config):
+    root, qmd = _write_qmd(tmp_path)
+    monkeypatch.setattr(figrun, "figrun_config", lambda: {"expensive_calls": ["qs_save"]})
+    monkeypatch.setattr(figrun, "_exp", lambda args: ("EXP1", qmd, root))
+    monkeypatch.setenv("FIGRUN_SCRATCH", str(tmp_path / "scratch"))
+    monkeypatch.setattr(figrun, "runner_command", lambda *a, **kw: ["Rscript", "engine.R"])
+    monkeypatch.setattr(figrun.subprocess, "call", lambda cmd, cwd=None: 0)
+    args = _args(labels=["cell-counts"], list=False, dry_run=True, title=None, why=None)
+    assert figrun.run(args) == 0
+    captured = capsys.readouterr()
+    (notice,) = captured.err.splitlines()
+    assert "are not guarded: prepData2, compCytof2, cluster2, " in notice
+    assert "qs_save" not in notice.split("are not guarded:")[1]
+    assert "1 target chunk(s) in EXP1" in captured.out
 
 
 def test_runner_defaults_to_rlog_when_present_else_rscript(monkeypatch):

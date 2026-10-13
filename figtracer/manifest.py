@@ -17,14 +17,28 @@ import re
 MANIFEST_NAME = "MANIFEST.jsonl"
 
 # Every kind an entry can be. Missing `kind` means figure: every entry written before
-# 2026-09-14 is one, and the field was added rather than back-filled.
-FIGURE, TABLE = "figure", "table"
+# 2026-09-14 is one, and the field was added rather than back-filled. A deck (.pptx) and
+# a document (.docx) are embedding documents like the note, recorded here because they
+# leave the lab: `figtracer/ooxml.py` reads them, docs/DOCUMENTS.md explains the loop.
+FIGURE, TABLE, DECK, DOCUMENT = "figure", "table", "deck", "document"
+EMBEDDING_KINDS = frozenset({DECK, DOCUMENT})
 
 _ISO = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})")
 
 
 def kind(entry: dict) -> str:
     return str(entry.get("kind") or FIGURE)
+
+
+def artefact_path(outputs: str, entry: dict) -> str:
+    """Where an entry's file is, from the folder its MANIFEST sits in.
+
+    `rel_path` is relative to `outputs/`. A figure sits in a dated subfolder and a table at
+    the root; a deck or document is the one kind whose path climbs out (`../deck/<file>`),
+    because the lab's folder contract keeps a deck beside its generator. Normalised so the
+    same file compares equal however it was reached."""
+    rel = entry.get("rel_path") or entry.get("fig") or ""
+    return os.path.normpath(os.path.join(outputs, rel))
 
 
 def saved_at_key(entry: dict) -> str:

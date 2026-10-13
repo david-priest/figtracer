@@ -46,7 +46,20 @@ in every case in this vault); and anything introduced as PMID, PMCID, cat., lot,
 DOI, ORCID or `#`. Bench numbers — a dispensing volume, a seed count — have a source that
 is not an analysis output: the experiment's `protocol/protocol.yaml` and `runs/*/run.yaml`,
 so those are in the corpus too. A note whose frontmatter says `role: planning` holds
-proposals, not claims, and is exempt unless `--include-planning`.
+proposals, not claims, and is exempt unless `--include-planning`. A clock time (`12:49`),
+an ISO date (`2026-10-07`) and a compound duration (`2 h 10 min`) are each one quantity
+written in parts, and none of the parts is a number. A dilution written `1:N` (`1:50`,
+`1:2,000`) is bench notation and is not checked at any length.
+
+**A note can say which of its sections make claims about the analysis.** A wet-lab note
+is mostly bench record: volumes, g-forces, event counts read off an instrument's own
+statistics export. None of it was supposed to come from the analysis, and checked against
+the analysis it buries the few numbers that matter. `notecheck_sections:` in a note's
+frontmatter lists heading prefixes, and only numbers under those headings are checked;
+without the key the whole note is, as before. Inside a checked section, a paragraph
+quoting an external source goes between `<!-- notecheck:off -->` and
+`<!-- notecheck:on -->`; what it would otherwise have reported is counted as suppressed,
+so the opt-out stays visible.
 
 **Every sourced number is attributed.** With chunk-scoped sources the corpus knows which
 chunk printed a value and in which run; with a CSV it knows the file. `--json` carries
@@ -114,6 +127,39 @@ ID_CONTEXT = re.compile(
     r"catalogue|BioLegend|Miltenyi|Fluidigm|Standard BioTools|Thermo|Enzo|Peprotech|order)"
     r"\s*:?\s*|#\s*)$", re.I)
 
+# A clock time, an ISO date and a compound duration are each ONE quantity written in parts,
+# and no part is a number anyone computed. "12:49" read as 12 and 49, a date as a month and a
+# day, "2 h 10 min" as 2 and 10: checked, a part either fails, which is noise, or matches some
+# unrelated 49 in the corpus, which is a pass that verified nothing. Minutes are exactly two
+# digits, 00-59, so "3:1" stays a ratio and is checked as two numbers; one whose right side is
+# two digits under 60 ("2:15") is indistinguishable from a time and reads as one. A lone
+# "10 min" is a single number and is still checked. Applied to the note only: the outputs are
+# tokenised as before, so this can remove a finding and can never add one.
+#
+# A dilution, "1:50" or "1:2,000", is bench notation and never a result, whatever its length.
+# Under the clock-time rule alone "1:50" was skipped and "1:100" was checked, so the outcome
+# depended on how many digits the titre had. The left side is exactly 1 and the right side is
+# whole digits: "3:1", "11:100" and "1:2.5" are still two numbers.
+NOT_A_NUMBER = re.compile(
+    r"(?<![\w.])(?:19|20)\d\d-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])"         # 2026-10-07
+    r"(?:T\d{2}:\d{2}(?::\d{2})?)?(?!\d)"                                        #   ...T16:37:05
+    r"|(?<![\w.:])(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?!\d|:\d)"             # 9:05  16:37:05
+    r"|(?<![\w.:,])1:(?:\d{1,3}(?:,\d{3})+|\d+)(?!\d|[:.,]\d)"                   # 1:50  1:2,000
+    r"|(?<![\w.])\d+\s?(?:h|hr|hrs|hours?)\s+\d+\s?(?:min|mins|minutes?)"        # 2 h 10 min
+    r"(?:\s+\d+\s?(?:s|sec|secs|seconds?))?\b"                                   #   ... 30 s
+    r"|(?<![\w.])\d+\s?(?:min|mins|minutes?)\s+\d+\s?(?:s|sec|secs|seconds?)\b"  # 10 min 30 s
+)
+
+# `notecheck_sections:` compares heading text without its number, so "Analysis" still finds
+# "## 3. Analysis" after a section is inserted above it and everything is renumbered.
+HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)[ \t#]*$")
+SECTION_NUMBER = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+")
+
+# A paragraph inside a checked section that quotes something the analysis did not produce: an
+# instrument's own statistics export, a figure made in another tool.
+BLOCK_OFF = re.compile(r"<!--\s*notecheck:\s*off\s*-->", re.I)
+BLOCK_ON = re.compile(r"<!--\s*notecheck:\s*on\s*-->", re.I)
+
 MAX_SHOWN = 25
 
 
@@ -178,51 +224,148 @@ def _strip_note(text: str, include_log: bool = False) -> str:
 REFERENCES_HEADING = re.compile(r"^\s*references\s*$", re.I)
 
 
-def _docx_paragraphs(path: str) -> str:
-    """A .docx as one line per paragraph, so a reported line number is a paragraph number."""
-    import xml.etree.ElementTree as ET
-    import zipfile
+OOXML = (".docx", ".pptx")
 
-    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-    with zipfile.ZipFile(path) as z:
-        root = ET.fromstring(z.read("word/document.xml"))
-    lines = []
-    for para in root.iter(W + "p"):
-        # Word splits a sentence across runs at every formatting change, so the text of a
-        # paragraph is the concatenation of its runs, not any single one.
-        lines.append("".join(t.text or "" for t in para.iter(W + "t")))
-    out = []
-    for line in lines:
-        if REFERENCES_HEADING.match(line):
+
+def _ooxml_text(path: str) -> tuple[str, list[int]]:
+    """A .docx or .pptx as one line per paragraph, with the paragraph or slide number of
+    each line, so a reported location means something to a reader: a paragraph in a
+    manuscript, a slide in a deck. Word splits a sentence across runs at every formatting
+    change, so a paragraph's text is the concatenation of its runs; tracked changes are
+    resolved as on accept, so a deleted or moved sentence is not read (figtracer/ooxml.py).
+    A deck's page-number shapes are skipped, and a manuscript stops at its References."""
+    from figtracer import ooxml
+    doc = ooxml.read(path)
+    lines, units = [], []
+    for p in doc.paragraphs:
+        if doc.format == "pptx" and (p.shape or "") == "page-number":
+            continue
+        if doc.format == "docx" and REFERENCES_HEADING.match(p.text):
             break
-        out.append(line)
-    return "\n".join(out)
+        lines.append(p.text)
+        units.append(p.unit)
+    return "\n".join(lines), units
 
 
-def note_numbers(path: str, include_log: bool = False) -> list[tuple[int, str, str, bool]]:
+def _docx_paragraphs(path: str) -> str:
+    return _ooxml_text(path)[0]
+
+
+def _locator(path: str):
+    """A function from a reported line to the keys that say where it is: `paragraph` in a
+    .docx (the line is the paragraph), `slide` in a .pptx (several lines per slide)."""
+    low = path.lower()
+    if low.endswith(".docx"):
+        return lambda ln: {"paragraph": ln}
+    if low.endswith(".pptx"):
+        units = _ooxml_text(path)[1]
+        return lambda ln: ({"slide": units[ln - 1]} if 1 <= ln <= len(units) else {})
+    return lambda ln: {}
+
+
+def _sections(path: str) -> list[str] | None:
+    """Heading prefixes a note restricts its own check to, or None for the whole note.
+
+    Markdown only: a .docx or a .pptx reaches this module as paragraphs of text, with no
+    headings to scope by. An empty list is read as no scope, not as "check nothing" -- a
+    key that names no section must not be a way to switch the check off.
+    """
+    if path.lower().endswith(OOXML):
+        return None
+    raw = (lkconfig.read_frontmatter(path) or {}).get("notecheck_sections")
+    if not raw:
+        return None
+    out = [str(v).strip() for v in (raw if isinstance(raw, list) else [raw]) if v is not None]
+    return [v for v in out if v] or None
+
+
+def _heading_key(text: str) -> str:
+    """Heading text as `notecheck_sections:` compares it: unnumbered, case-folded."""
+    return SECTION_NUMBER.sub("", text.strip()).casefold()
+
+
+def _off_spans(text: str) -> list[tuple[int, int]]:
+    """Character spans between a `<!-- notecheck:off -->` and the next `<!-- notecheck:on -->`.
+
+    An `off` that is never closed runs to the end of the note.
+    """
+    spans, pos = [], 0
+    while True:
+        a = BLOCK_OFF.search(text, pos)
+        if not a:
+            return spans
+        b = BLOCK_ON.search(text, a.end())
+        spans.append((a.end(), b.start() if b else len(text)))
+        if not b:
+            return spans
+        pos = b.end()
+
+
+def note_numbers(path: str, include_log: bool = False, opted_out: list | None = None,
+                 unmatched: list[str] | None = None) -> list[tuple[int, str, str, bool]]:
     """(line_no, token, context, is_percent) for every candidate result number.
 
     `is_percent` gates the proportion fallback. Applying that fallback to every
     number instead made the check quietly weak: with a corpus of ~12,000 values, a
     bare "48" matched any stored 0.48 and a real error could pass unseen. A note
     value is only a percentage when it is written as one.
+
+    A note that declares `notecheck_sections:` yields only the numbers under those
+    headings. A listed heading covers its subsections, down to the next heading at its own
+    level or above, so "Conclusions" takes "### Carry-forward" with it. `--include-log`
+    still adds the `# Log`, which is no section's subsection. `unmatched`, when given,
+    receives each declared prefix that no heading carries: a scope naming a section that
+    was since renamed checks nothing there, and says nothing about it.
+
+    `opted_out`, when given, receives the numbers between `<!-- notecheck:off -->` and
+    `<!-- notecheck:on -->` in the same shape. They are never returned.
     """
-    if path.lower().endswith(".docx"):
-        text = normalise(_docx_paragraphs(path))
+    sections = None
+    if path.lower().endswith(OOXML):
+        text = normalise(_ooxml_text(path)[0])
     else:
         with open(path, encoding="utf-8", errors="replace") as fh:
             raw = fh.read()
         text = normalise(_strip_note(raw, include_log=include_log))
+        sections = _sections(path)
+    keys = [_heading_key(s) for s in sections or []]
+    carried: set[str] = set()       # declared prefixes that some heading carries
+    scope_level = None              # level of the heading that opened the checked region
+    off = _off_spans(text)
     out = []
+    pos = 0
     for ln, line in enumerate(text.split("\n"), 1):
+        start, pos = pos, pos + len(line) + 1
+        h = HEADING.match(line) if keys else None
+        if h:
+            level, title = len(h.group(1)), _heading_key(h.group(2))
+            hit = [k for k in keys if title.startswith(k)]
+            carried.update(hit)
+            if scope_level is None or level <= scope_level:
+                is_log = include_log and LOG_HEADING.match(line)
+                scope_level = level if (hit or is_log) else None
         if line.lstrip().startswith("#"):        # headings, not prose
             continue
+        if keys and scope_level is None:
+            continue
+        not_numbers = [m.span() for m in NOT_A_NUMBER.finditer(line)]
         for m in NUM.finditer(line):
             tok = m.group()
+            # Overlap, not containment: a sign belongs to the token and sits before the span,
+            # so " -1:200" at the end of a range would otherwise leave "-1" behind.
+            if any(m.start() < b and m.end() > a for a, b in not_numbers):
+                continue
             if IDENT.match(tok) or ID_CONTEXT.search(line[max(0, m.start() - 24):m.start()]):
                 continue
             tail = line[m.end():m.end() + 1]
-            out.append((ln, tok, line.strip(), tail == "%"))
+            item = (ln, tok, line.strip(), tail == "%")
+            if any(a <= start + m.start() < b for a, b in off):
+                if opted_out is not None:
+                    opted_out.append(item)
+                continue
+            out.append(item)
+    if unmatched is not None:
+        unmatched.extend(s for s, k in zip(sections or [], keys) if k not in carried)
     return out
 
 
@@ -412,10 +555,10 @@ def _ignored(path: str) -> set[float]:
     frontmatter, and reading one as text raises on the first non-UTF-8 byte of its zip
     container. Without somewhere to put them, a manuscript reports an ORCID, an FCS format
     version and a library's version number as findings for ever, and a report nobody can
-    take to zero is a report nobody reads. So a .docx reads `<the file>.notecheck.yaml`
-    beside it, with the same `notecheck_ignore:` key.
+    take to zero is a report nobody reads. So a .docx, and a .pptx with it, reads
+    `<the file>.notecheck.yaml` beside it, with the same `notecheck_ignore:` key.
     """
-    if path.lower().endswith(".docx"):
+    if path.lower().endswith(OOXML):
         side = _sidecar(path)
         if not os.path.exists(side):
             return set()
@@ -433,24 +576,47 @@ def _ignored(path: str) -> set[float]:
 
 
 def check_note(path: str, corpus: Corpus, include_log: bool = False,
-               attribution: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
-    """(findings, suppressed) for one note.
+               attribution: list[dict] | None = None, kind: str | None = None) -> tuple[list[dict], list[dict]]:
+    """(findings, suppressed) for one note, deck or Word document.
 
     `attribution`, when given, receives one record per SOURCED number: where in the note
     it sits and which chunk, file or ledger produced it. That record is the fact-tracing
     counterpart of the figure provenance index, and it is free once the corpus is
     chunk-scoped.
+
+    `kind` names a recorded deck or document (`deck` / `document`); its findings carry it
+    as `document`, and a `slide` or `paragraph` beside the line, so a reader and
+    `figtracer sync` can tell them from the note's.
     """
     ignore = _ignored(path)
     findings, suppressed = [], []
-    for ln, tok, ctx, is_pct in note_numbers(path, include_log=include_log):
+    opted_out: list = []
+    unmatched: list[str] = []
+    locate = _locator(path)
+    checked = note_numbers(path, include_log=include_log, opted_out=opted_out,
+                           unmatched=unmatched)
+    # Same reasoning as a declared note that does not resolve: a section believed to be
+    # checked and is not. Without this a renamed heading turns the scope into a silent pass.
+    for prefix in unmatched:
+        findings.append({
+            "check": "missing-section", "level": ERROR,
+            "note": os.path.basename(path), "line": 0, "value": prefix,
+            "context": f"notecheck_sections lists {prefix!r} and no heading starts with it",
+            "detail": "a listed section with no heading is a section believed to be checked "
+                      "and is not",
+        })
+    for i, (ln, tok, ctx, is_pct) in enumerate(checked + opted_out):
+        in_off_block = i >= len(checked)
         if YEAR.match(tok):
             continue
         hit = corpus.match(tok, is_percent=is_pct)
         if hit is not None:
-            if attribution is not None:
+            # A number the note says came from elsewhere is not attributed to a chunk it
+            # happens to equal.
+            if attribution is not None and not in_off_block:
                 attribution.append({"note": os.path.basename(path), "line": ln, "value": tok,
-                                    "sources": sorted(hit)})
+                                    "sources": sorted(hit), **locate(ln),
+                                    **({"document": kind} if kind else {})})
             continue
         # Found only in a superseded run: the number WAS produced here, and no longer
         # is. That is the "910 tests across 3 groups" failure — read from run 11 of 41
@@ -465,11 +631,18 @@ def check_note(path: str, corpus: Corpus, include_log: bool = False,
             "line": ln,
             "value": tok,
             "context": ctx[:120],
+            **locate(ln),
         }
+        if kind:
+            item["document"] = kind
         if old_runs:
             item["last_seen"] = max(old_runs)
             item["detail"] = (f"produced by a superseded run ({max(old_runs)}); "
                               "not by the current one")
+        if in_off_block:
+            item["suppression"] = "notecheck:off block in the note"
+            suppressed.append(item)
+            continue
         try:
             if to_float(tok) in ignore:
                 item["suppression"] = "notecheck_ignore in note frontmatter"
@@ -478,6 +651,7 @@ def check_note(path: str, corpus: Corpus, include_log: bool = False,
         except ValueError:
             pass
         findings.append(item)
+    suppressed.sort(key=lambda s: s["line"])      # the two kinds interleave in note order
     return findings, suppressed
 
 
@@ -502,6 +676,42 @@ def _paths(fm: dict) -> tuple[str, str | None, str]:
     root = os.path.dirname(outputs)
     log = os.path.join(root, "session.log")
     return outputs, (log if os.path.isfile(log) else None), os.path.dirname(fm["_note"])
+
+
+def _project(name: str) -> tuple[str, str]:
+    """(project key, its outputs dir) from projects.yaml. A project has no notebook and no
+    session.log; its corpus is its own root CSVs plus whatever `--also` adds, and what it
+    checks is the decks and Word documents recorded against it (a manuscript draws on
+    several experiments and is recorded at the project)."""
+    cfg = lkconfig.load()
+    known = sorted(cfg.get("projects", {}))
+    if name not in known:
+        raise ValueError(f"no project {name!r} in projects.yaml; known: {', '.join(known) or '(none)'}")
+    p = lkconfig.project(name, cfg)
+    data_root = os.path.abspath(os.path.expanduser(p["data_root"]))
+    return name, os.path.join(data_root, "outputs")
+
+
+def _recorded_documents(outputs: str) -> list[dict]:
+    """The newest record of every deck and Word document in this scope's MANIFEST."""
+    from figtracer import embeds
+    return [e for _t, e in sorted(embeds.resolve_documents(outputs).items())]
+
+
+def partition(findings: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(the notes' findings, the decks' and documents' findings): the second kind is
+    reported by `figtracer sync` and blocks its commit only with --strict-documents."""
+    return ([f for f in findings if not f.get("document")],
+            [f for f in findings if f.get("document")])
+
+
+def location(f: dict) -> str:
+    """Where a finding sits, as a reader would look for it: a slide, a paragraph, a line."""
+    if f.get("slide"):
+        return f"slide {f['slide']}"
+    if f.get("paragraph"):
+        return f"¶ {f['paragraph']}"
+    return str(f.get("line", 0))
 
 
 def _notes(note_dir: str, include_planning: bool = False) -> tuple[list[str], list[str]]:
@@ -567,19 +777,31 @@ def _extra_notes(fm: dict, extra: list[str] | None) -> list[str]:
 def diagnose(exp: str | None = None, also: list[str] | None = None,
              cwd: str | None = None, extra_notes: list[str] | None = None,
              include_log: bool = False, include_planning: bool = False,
-             attribute: bool = False) -> dict:
-    """Pure — returns a result dict, prints nothing, never exits."""
-    fm = _experiment(exp, cwd=cwd)
-    eid = str(fm.get("experiment_id") or exp or "?")
-    outputs, log, note_dir = _paths(fm)
+             attribute: bool = False, project: str | None = None,
+             documents_too: bool = True) -> dict:
+    """Pure — returns a result dict, prints nothing, never exits.
 
-    corpus = build_corpus(outputs, log, qmd_labels=_qmd_labels(fm))
+    `project` checks a project instead of an experiment: the decks and Word documents
+    recorded against it, with a corpus of its root CSVs and the `--also` experiments.
+    `documents_too` adds the scope's recorded decks and documents to the notes."""
+    if project:
+        if exp:
+            raise ValueError("pass an experiment or a project, not both")
+        fm = {}
+        eid, outputs = _project(project)
+        log, note_dir = None, None
+    else:
+        fm = _experiment(exp, cwd=cwd)
+        eid = str(fm.get("experiment_id") or exp or "?")
+        outputs, log, note_dir = _paths(fm)
+
+    corpus = build_corpus(outputs, log, qmd_labels=_qmd_labels(fm) if fm else None)
 
     # A note that legitimately quotes another experiment's numbers should SAY SO,
     # not have those numbers added to an ignore list. An ignore list makes a real
     # value indistinguishable from a typo; `notecheck_also:` records where the value
     # came from, which is the thing worth knowing a year later.
-    declared = lkconfig.read_frontmatter(fm["_note"]).get("notecheck_also") or []
+    declared = (lkconfig.read_frontmatter(fm["_note"]).get("notecheck_also") or []) if fm else []
     if not isinstance(declared, list):
         declared = [declared]
     extra = []
@@ -602,17 +824,38 @@ def diagnose(exp: str | None = None, also: list[str] | None = None,
             "context": f"declared for checking but not found: {bad}",
             "detail": "a path that does not resolve is a note believed to be checked and is not",
         })
-    notes, planning = _notes(note_dir, include_planning=include_planning)
+    notes, planning = _notes(note_dir, include_planning=include_planning) if note_dir else ([], [])
     for p in notes + outside:
         f, s = check_note(p, corpus, include_log=include_log, attribution=attribution)
         findings.extend(f)
         suppressed.extend(s)
         documents.append({"note": os.path.basename(p), "findings": len(f), "suppressed": len(s)})
+        scope = _sections(p)
+        if scope:
+            documents[-1]["sections"] = scope
     for p in planning:
         documents.append({"note": os.path.basename(p), "findings": 0, "suppressed": 0,
                           "skipped": "role: planning"})
+    # The decks and Word documents recorded against this scope carry the same numbers out
+    # of the lab; they are read like notes, and their findings say which slide or paragraph.
+    n_docs = 0
+    if documents_too:
+        from figtracer import manifest as _manifest
+        for e in _recorded_documents(outputs):
+            kind = _manifest.kind(e)
+            name = e.get("fig") or os.path.basename(e["_path"])
+            if e.get("_missing"):
+                documents.append({"note": name, "findings": 0, "suppressed": 0, "kind": kind,
+                                  "title": e["title"], "skipped": "recorded file missing"})
+                continue
+            f, s = check_note(e["_path"], corpus, include_log=include_log, attribution=attribution, kind=kind)
+            findings.extend(f)
+            suppressed.extend(s)
+            documents.append({"note": name, "findings": len(f), "suppressed": len(s), "kind": kind,
+                              "title": e["title"]})
+            n_docs += 1
 
-    _order = {"missing-note": 0, "stale-number": 1, "unsourced-number": 2}
+    _order = {"missing-note": 0, "missing-section": 0, "stale-number": 1, "unsourced-number": 2}
     findings.sort(key=lambda x: (_order.get(x["check"], 9), x["note"], x["line"]))
     return {
         "schema_version": 1,
@@ -633,9 +876,11 @@ def diagnose(exp: str | None = None, also: list[str] | None = None,
             "removed_chunks": sorted(corpus.removed_chunks),
         },
         "summary": {
-            "notes": len(documents),
+            "notes": len(documents) - n_docs,
+            "documents": n_docs,
             "unsourced": sum(f["check"] == "unsourced-number" for f in findings),
             "stale": sum(f["check"] == "stale-number" for f in findings),
+            "document_findings": sum(1 for f in findings if f.get("document")),
             "suppressed": len(suppressed),
         },
         "findings": findings,
@@ -695,21 +940,31 @@ def _report(result: dict, show_all: bool = False) -> None:
     if planning:
         print(f"  planning note(s) exempt (proposals, not claims) — --include-planning to check: "
               f"{', '.join(planning)}")
+    for d in result.get("documents", []):
+        if d.get("sections"):
+            print(f"  {d['note']}: only {', '.join(d['sections'])} checked "
+                  f"(`notecheck_sections:` in its frontmatter)")
+    recorded = [d for d in result.get("documents", []) if d.get("kind")]
+    if recorded:
+        print("  decks and documents checked: " + ", ".join(
+            f"{d['note']} ({d['kind']} {d['title']}{', ' + d['skipped'] if d.get('skipped') else ''})"
+            for d in recorded))
     print()
 
     findings = result["findings"]
     if not findings:
-        print("  clean: every number in every note is present in the current outputs.")
+        print("  clean: every number in every note" + (", deck and document" if recorded else "")
+              + " is present in the current outputs.")
     # Stale first: a number that was true once reads as checked, so it survives review
     # in a way a number that was never produced does not.
-    for check in ("missing-note", "stale-number", "unsourced-number"):
+    for check in ("missing-note", "missing-section", "stale-number", "unsourced-number"):
         items = [f for f in findings if f["check"] == check]
         if not items:
             continue
         print(f"== {check} ({ERROR}) — {len(items)} ==")
         shown = items if show_all else items[:MAX_SHOWN]
         for f in shown:
-            print(f"  {f['note']}:{f['line']}  {f['value']}")
+            print(f"  {f['note']}:{location(f)}  {f['value']}")
             if f.get("detail"):
                 print(f"      {f['detail']}")
             print(f"      {f['context']}")
@@ -717,7 +972,8 @@ def _report(result: dict, show_all: bool = False) -> None:
             print(f"  ... and {len(items) - len(shown)} more (pass --all to list them)")
         print()
     s = result["summary"]
-    print(f"summary: {s['notes']} note(s) — {s['stale']} stale, {s['unsourced']} unsourced, "
+    docs = f", {s['documents']} deck(s)/document(s)" if s.get("documents") else ""
+    print(f"summary: {s['notes']} note(s){docs} — {s['stale']} stale, {s['unsourced']} unsourced, "
           f"{s['suppressed']} suppressed")
 
 
@@ -726,6 +982,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="figtracer notecheck",
         description="Check that every number in an experiment's lab notes exists in its outputs.")
     p.add_argument("--exp", help="experiment ID (default: infer from the working directory)")
+    p.add_argument("--project", help="projects.yaml key: check the decks and Word documents recorded "
+                                     "against the project, with its root CSVs and --also as the corpus")
+    p.add_argument("--no-documents", action="store_true",
+                   help="leave the scope's recorded decks and Word documents unchecked")
     p.add_argument("--also", action="append", default=[],
                    help="another experiment whose outputs also count (repeatable); the hub "
                         "note's `notecheck_also:` frontmatter is added to this")
@@ -769,7 +1029,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = diagnose(exp=args.exp, also=args.also, extra_notes=args.note,
                           include_log=args.include_log, include_planning=args.include_planning,
-                          attribute=args.attribute)
+                          attribute=args.attribute, project=args.project,
+                          documents_too=not args.no_documents)
     except ValueError as e:
         sys.stderr.write(f"figtracer notecheck: {e}\n")
         return 2

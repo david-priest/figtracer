@@ -63,6 +63,13 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("-o", "--out")
     pr.add_argument("--dpi", type=int, default=300)
 
+    pz = sub.add_parser("rasterise",
+                        help="page 1 of a PDF -> PNG via pdftoppm, with unembedded bold and "
+                             "oblique Helvetica drawn as such")
+    pz.add_argument("pdf")
+    pz.add_argument("-o", "--out", help="output PNG (default <pdf stem>.<dpi>dpi.png alongside)")
+    pz.add_argument("--dpi", type=int, default=300)
+
     po = sub.add_parser("optimise",
                         help="shrink a figure PDF/.ai by downsampling embedded rasters (vector preserved)")
     po.add_argument("input", help="a .pdf / PDF-compatible .ai, or a directory of them")
@@ -138,6 +145,9 @@ def main(argv=None) -> int:
     if args.cmd == "render":
         from . import render
         return render.run(args)
+    if args.cmd == "rasterise":
+        from . import rasterise
+        return rasterise.run(args)
     if args.cmd == "optimise":
         from . import optimise
         return optimise.run(args)
