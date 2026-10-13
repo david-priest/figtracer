@@ -31,6 +31,7 @@ analysis runs; a manifest-tracked figure re-syncs.
 
 - **Start an experiment:** `figtracer new "<title>" --project <PROJECT>` — scaffolds the note +
   data/analysis/outputs directories, cross-linked. Don't hand-create these folders.
+- **Start a CyTOF clustering analysis:** add `--id <ID> --analysis-template cytof_clustering` to `figtracer new`. It writes the standard notebook and its run plan (`analysis/<ID>.runplan.json`). Fill in the constants marked `TODO` and keep the chunk labels, which the run plan and `figrun` address; do not write the notebook from scratch.
 - **Save a figure with provenance:** use `saveFig()` / `savefig()` as above — never `ggsave()` /
   `plt.savefig()` directly if the figure belongs in the note.
 - **Re-render a figure after editing its chunk:** `figtracer figrun --exp <ID> <chunk-label>` (or
@@ -42,7 +43,19 @@ analysis runs; a manifest-tracked figure re-syncs.
   note.
 - **Check the numbers in a note:** `figtracer notecheck --exp <ID>`; `--where <value>` says which
   chunk or table produced one. Fix the note or the chunk; do not add numbers to the ignore list to
-  make the check pass.
+  make the check pass. The experiment's recorded decks and Word documents are checked with the
+  notes, by slide or paragraph; a number on a slide that no output produces is wrong on the slide.
+- **Bench numbers in a note are declared, not overridden:** `notecheck_sections:` in the note's frontmatter limits the check to the listed headings (the wet-lab template sets `[Analysis, Conclusions]`), and `<!-- notecheck:off -->` / `<!-- notecheck:on -->` exempt a paragraph that quotes an external source. Neither is for a number the analysis should have produced.
+- **Build a deck from the experiment's figures:** write the generator with `figtracer.deck.DeckBuild`
+  (`build.add_figure(slide, "<title>", ...)`, `build.table("<title>")`, `build.target(...)`,
+  `build.record(out)`); it resolves each title to its newest render, tags the picture with it and
+  records the deck in the MANIFEST (`docs/DOCUMENTS.md`). Never resolve or rasterise figures in
+  the generator yourself, and never type a result number onto a slide.
+- **Keep a manuscript's figures current:** `figtracer document tag <file.docx> --fig N --title <t>
+  --exp <ID>` once per figure, `figtracer document record <file> --project <P> --title <t>`, then
+  `figtracer document check` to see which figure is behind and `figtracer document swap ... -y` to
+  refresh one in place. Never rebuild or copy the document, and never write it while it is open in
+  Word.
 - **Close out a session:** `figtracer sync` — re-embeds figures and tables into the note, updates
   its status/log, runs notecheck and stops on findings, git-commits the data folder (never
   pushes), and rebuilds the project dashboard.

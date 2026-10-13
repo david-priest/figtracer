@@ -90,6 +90,7 @@ The figure is then in the manifest, and the note can follow its latest render:
   HTML or Obsidian wikilink form.
 - `figtracer figsync sync` — rasterise the newest render of every embedded title to its stable
   attachment, and rewrite the provenance index.
+- `figtracer fig rasterise <figure.pdf> -o <figure.png> --dpi 300` — the PDF-to-PNG step `sync` uses, for a script that makes its own PNGs from PDF renders. Both run poppler's `pdftoppm` with the unembedded Helvetica of a base R `pdf()` file mapped to Arial, because on macOS poppler otherwise draws bold and oblique Helvetica as regular. Where Arial is not installed the PDF is rasterised as `pdftoppm` does by default, and one warning says so.
 - `figtracer figsync drift` — report embeds that are stale, not yet materialised, or have no
   registered source.
 - `figtracer fig embed <spec.yaml>` — compose panels into a multipanel figure and write it into a
@@ -122,12 +123,13 @@ Chunks that rebuild the analysis object itself, such as clustering, embedding, m
 
 Each render is verified before success is reported: the new manifest line must sit under this experiment's `outputs/`, point at this notebook, carry the chunk label, and refer to a file that is not a blank device. The chunk label is stamped into the manifest line, which is what makes `--changed` exact for figures whose titles are built at run time.
 
-`figrun` is R-only for now, and resolves the notebook through the experiment's note (`--qmd` picks among several). The R side needs `jsonlite`, `codetools`, `here` and `knitr`. Which calls count as "rebuilds the object" or "reloads the checkpoint", and how R is launched, are set in an optional `figrun:` block of `~/.config/labkit/config.yaml`; the defaults are one lab's idioms (`cluster2`, `qs_save`, `qs_read`, …) and yours will differ:
+`figrun` is R-only for now, and resolves the notebook through the experiment's note (`--qmd` picks among several). The R side needs `jsonlite`, `codetools`, `here` and `knitr`. Which calls count as "rebuilds the object" or "reloads the checkpoint", and how R is launched, are set in an optional `figrun:` block of `~/.config/labkit/config.yaml`; the defaults are one lab's CyTOF idioms (CATALYST's `prepData`, `computeSpillmat`, `compCytof`, `cluster` and `runDR`, that lab's wrappers `prepData2`, `compCytof2`, `cluster2` and `runDR2`, `mergeClusters`, `read.flowSet`, `read.FCS` and `qs_save`; `qs_read` for the reload) and yours will differ. A name counts when the chunk calls it, with or without a namespace prefix, so `cluster(` and `CATALYST::cluster(` both do; the same word in a comment, in a string, as a column or argument, or inside a longer name such as `cluster_ids(` does not. `expensive_calls_extra` adds names to the list in force. `expensive_calls` replaces the default list, and when that leaves a default out `figrun` says so in one line, before `--list` and at the start of a run, naming the calls that are no longer guarded:
 
 ```yaml
 figrun:
   runner: Rscript                      # default: rlog if it is on PATH, else Rscript
-  expensive_calls: [runPCA, RunUMAP, FindClusters, saveRDS]
+  expensive_calls_extra: [saveRDS]     # added to the list in force
+  expensive_calls: [runPCA, RunUMAP, FindClusters]   # replaces the default list
   reload_calls: [readRDS]
 ```
 
@@ -137,15 +139,41 @@ A figure in a note has a manifest line behind it. A number typed into the prose,
 
 A table is saved like a figure and becomes a first-class artefact. `saveTable(df, "cluster_medians")` in R or `savetable(df, "cluster_medians")` in Python writes `outputs/cluster_medians.csv`, overwritten in place, and a manifest line with `kind: table`. `figtracer figsync place cluster_medians --table --note <note> -y` writes the table into the note between markers, and `figsync sync` regenerates the block whenever the CSV changes, leaving the prose around it alone.
 
-`figtracer notecheck --exp EXP01` then checks every number in the experiment's notes against what the analysis currently produces: the saved tables, each chunk's console output from the newest run that ran it, and the experiment's protocol and run ledgers. A number nothing current produced is reported as unsourced; one that an earlier run produced and the current one does not is reported as stale, with the run that last produced it. Years, identifiers such as PMIDs and catalogue numbers, a note's dated `# Log` and planning notes are exempt. `figtracer sync` runs the check before it commits and stops on findings.
+`figtracer notecheck --exp EXP01` then checks every number in the experiment's notes against what the analysis currently produces: the saved tables, each chunk's console output from the newest run that ran it, and the experiment's protocol and run ledgers. A number nothing current produced is reported as unsourced; one that an earlier run produced and the current one does not is reported as stale, with the run that last produced it. Years, clock times (`12:49`), ISO dates, compound durations (`2 h 10 min`), identifiers such as PMIDs and catalogue numbers, a note's dated `# Log` and planning notes are exempt. A dilution written `1:N` (`1:50`, `1:100`, `1:2,000`) is bench notation and is not checked at any length; any other ratio (`3:1`) is read as two numbers unless it parses as a clock time. `figtracer sync` runs the check before it commits and stops on findings.
 
 ```bash
-figtracer notecheck --exp EXP01                 # report
+figtracer notecheck --exp EXP01                 # report, notes and recorded decks or documents alike
 figtracer notecheck --exp EXP01 --where 0.954   # which chunk, table or ledger produced this value
 figtracer notecheck --exp EXP01 --json --attribute   # every sourced number with its source, for an agent or CI
+figtracer notecheck --project PAPER --also EXP01 --also EXP02   # a manuscript recorded at the project
 ```
 
+A deck or Word document recorded against the experiment ([Decks and Word documents](#decks-and-word-documents)) is read with the notes: every number on every slide or in every paragraph, reported by slide or paragraph, with Word's tracked changes resolved as on accept.
+
+A note declares which of its numbers are claims about the analysis. A wet-lab note is mostly bench record (volumes, spin speeds, event counts read off an instrument's own export), and none of that was meant to come from the analysis.
+
+```yaml
+notecheck_sections: [Analysis, Conclusions]   # check only the numbers under these headings
+notecheck_ignore: [209]                       # single values that are not results
+```
+
+`notecheck_sections:` lists heading prefixes, and only numbers under those headings are checked; without the key the whole note is. A heading is compared without its number and case, so `Analysis` matches `## 3. Analysis`, and a listed heading covers its subsections down to the next heading at its own level or above. A listed prefix that no heading carries is reported as `missing-section`, so a renamed heading cannot turn the scope into a silent pass. The wet-lab template `figtracer new` scaffolds sets the key to `[Analysis, Conclusions]`. The key applies to markdown notes; a `.docx` is always checked whole.
+
+Inside a checked section, a paragraph that quotes an external source (an instrument's statistics, a figure made in another tool) goes between `<!-- notecheck:off -->` and `<!-- notecheck:on -->`. The markers work on their own lines or inside a sentence, and an `off` that is never closed runs to the end of the note. Numbers between them that the outputs do not contain are counted as suppressed in the summary line and listed under `suppressed` in `--json`, as the ones matched by `notecheck_ignore:` are, so the opt-out stays visible. The wet-lab template wraps the body of its Carry-forward subsection this way: it sits under Conclusions, and what is written there is bench values for the next run.
+
 The console corpus reads an append-only R session log in the format `seekit`'s `start_session_log()` writes, one block per run with a marker per chunk; `figrun` writes those markers, and a knit does too.
+
+## Decks and Word documents
+
+A deck and a manuscript carry the same figures and numbers as the note and leave the lab, so they are kept honest the same way ([docs/DOCUMENTS.md](docs/DOCUMENTS.md)). A deck built with `figtracer.deck.DeckBuild` places each figure from its newest render and tags the picture with the render it came from; a Word document has each of its figures tagged once by position (`figtracer document tag paper.docx --fig 2 --title gating_strategy --exp EXP01`) and is never rebuilt. Either file is recorded in the MANIFEST with its hash (`kind: deck` or `document`), `figsync drift` says which slide or paragraph is behind the outputs, `figsync sync` replaces a stale picture's pixels in place, and `notecheck` reads the numbers on every slide and in every paragraph.
+
+```bash
+figtracer deck inspect "deck/results (full).pptx"               # what it embeds, its properties and record
+figtracer deck check --exp EXP01                                 # every recorded deck against the newest renders
+figtracer document tag paper.docx --fig 2 --title gating_strategy --exp EXP01
+figtracer document swap paper.docx --title gating_strategy --exp EXP01 -y   # the newest render, in place
+figtracer document record paper.docx --project PAPER --title manuscript
+```
 
 ## The full experiment system (optional)
 

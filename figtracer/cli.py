@@ -32,7 +32,7 @@ usage: figtracer <command> [args]
     init          write the per-machine user config
 
   figures (figtools)
-    fig <sub>     register | inspect | normalize | assemble | check | render | verify | embed | watch | optimise | doctor
+    fig <sub>     register | inspect | normalize | assemble | check | render | rasterise | verify | embed | watch | optimise | doctor
 
   protocols (moved to protokit, 2026-09-02)
     protocol      forwards to `protokit` when it is installed
@@ -44,6 +44,10 @@ usage: figtracer <command> [args]
   figures <-> notes
     figsync       sync lab-note figures to the latest f2 render (index | drift | sync)
     figrun        render a qmd's figure chunks headlessly (--list | --changed | --awaiting)
+
+  decks and Word documents (provenanced like the note)
+    deck <sub>    inspect | record | check — a deck built with figtracer.deck.DeckBuild
+    document <sub>  inspect | tag | swap | record | check — a Word document, or any hand-made deck
 
   whole-vault health
     vault lint    broken links, ambiguous filenames, orphaned attachments (read-only)
@@ -102,6 +106,18 @@ def main(argv=None) -> int:
     if cmd == "figrun":
         from figtracer import figrun
         return figrun.main(rest)
+
+    if cmd == "deck":
+        from figtracer import deck
+        if not rest or rest[0] in ("-h", "--help"):
+            return deck.main(["-h"])
+        return deck.main(rest)
+
+    if cmd == "document":
+        from figtracer import document
+        if not rest or rest[0] in ("-h", "--help"):
+            return document.main(["-h"])
+        return document.main(rest)
 
     if cmd == "vault":
         from figtracer import vault

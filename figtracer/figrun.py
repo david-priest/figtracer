@@ -30,8 +30,18 @@ are one lab's idioms and another lab's will differ:
 
     figrun:
       runner: rlog            # default: rlog if on PATH, else Rscript
-      expensive_calls: [prepData2, cluster2, mergeClusters, qs_save]
+      expensive_calls_extra: [saveRDS]     # added to the list in force
+      expensive_calls: [prepData2, cluster2, mergeClusters, qs_save]   # REPLACES the defaults
       reload_calls: [qs_read, readRDS]
+
+`expensive_calls_extra` adds names to the list in force and is the key to reach for.
+Setting `expensive_calls` replaces the default list (DEFAULT_EXPENSIVE_CALLS below);
+it does not add to it, so a config that names one call there stops guarding every
+default it leaves out. figrun says so in one line, naming them, before `--list` and
+at the start of a run. A name counts when the chunk CALLS it, `cluster(` or
+`CATALYST::cluster(`, in code with comments and the contents of string literals
+removed. `cluster_ids(`, a column named `cluster` and an axis label
+`"cluster (meta20)"` are not calls to `cluster` and do not count.
 """
 from __future__ import annotations
 
@@ -58,6 +68,16 @@ from figtracer.sync import resolve
 DEFAULT_EXPENSIVE_CALLS = (
     "prepData2", "compCytof2", "cluster2", "runDR2", "mergeClusters",
     "read.flowSet", "read.FCS", "qs_save",
+    # The CATALYST functions the `2` wrappers above stand in for. A notebook that
+    # calls them directly, as `cluster(` or `CATALYST::cluster(`, builds, compensates,
+    # clusters and embeds the object exactly as the wrappers do. With only the
+    # wrappers listed those chunks were classed "setup": naming one as a target
+    # re-ran it without --allow-expensive, and the resolver was free to pull it in
+    # as a prerequisite. `computeSpillmat` is the first half of compensation.
+    # ⚠ `cluster` is also an ordinary word and a common column name. It is matched
+    # only as a call (see Chunk.is_expensive), never as `cluster_ids(`, a column, an
+    # argument or text in a string.
+    "prepData", "computeSpillmat", "compCytof", "cluster", "runDR",
 )
 # The checkpoint reload. Marked `eval: false` in every notebook because it is a
 # manual escape hatch interactively — but headlessly it is the ONLY way to get the
@@ -90,8 +110,24 @@ def apply_config(fc: dict) -> None:
         if isinstance(v, str):
             v = [v]
         return tuple(str(x) for x in v)
-    EXPENSIVE_CALLS = _list("expensive_calls", DEFAULT_EXPENSIVE_CALLS)
+    # `expensive_calls` REPLACES the defaults. `expensive_calls_extra` adds to whichever
+    # list that leaves in force, so guarding one more call does not mean restating the
+    # defaults, or dropping them all by naming only the new one.
+    calls = _list("expensive_calls", DEFAULT_EXPENSIVE_CALLS)
+    extra = dict.fromkeys(_list("expensive_calls_extra", ()))
+    EXPENSIVE_CALLS = calls + tuple(c for c in extra if c not in calls)
     RELOAD_CALLS = _list("reload_calls", DEFAULT_RELOAD_CALLS)
+
+
+def unguarded_defaults() -> list[str]:
+    """Default expensive calls the list in force no longer holds.
+
+    Empty unless the config sets `expensive_calls`, which replaces the defaults, and
+    neither it nor `expensive_calls_extra` names one of them. A chunk calling such a
+    function is classed "setup": it runs as a target without --allow-expensive and
+    the resolver may pull it in. `run` reports these before it lists or runs anything.
+    """
+    return [c for c in DEFAULT_EXPENSIVE_CALLS if c not in EXPENSIVE_CALLS]
 
 
 def runner_command(fc: dict, engine: str, plan_path: str, eid: str, title: str,
@@ -159,6 +195,42 @@ def strip_r_comments(src: str) -> str:
     return "\n".join(out)
 
 
+def strip_r_strings(src: str) -> str:
+    """Comment-stripped `src` with the text inside string literals removed and the
+    quotes kept — for the regex that decides whether a chunk CALLS a function.
+
+    A string is no more a call than a comment is. An axis label
+    `"cells per cluster (meta20)"` and a `sprintf("%d cluster(s)", n)` hold
+    `cluster (` and `cluster(`, and `cluster` is in EXPENSIVE_CALLS. Left in, a chunk
+    that only draws or prints is classed expensive, refused as a target and dropped
+    from every plan: the failure strip_r_comments records, by another route.
+
+    Line by line, with the quote and escape rules of strip_r_comments. A line whose
+    quote never closes (a string that runs on to the next line, an apostrophe inside
+    a backtick name) is returned unchanged: the tracking cannot be trusted there, and
+    leaving the text in can make a chunk expensive but cannot hide a call.
+    """
+    out = []
+    for line in src.split("\n"):
+        kept, quote, i, n = [], None, 0, len(line)
+        while i < n:
+            ch = line[i]
+            if quote is not None:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote = None
+                    kept.append(ch)
+            else:
+                kept.append(ch)
+                if ch in "\"'":
+                    quote = ch
+            i += 1
+        out.append(line if quote is not None else "".join(kept))
+    return "\n".join(out)
+
+
 class Chunk:
     __slots__ = ("label", "body", "opts", "eval_off", "line", "_code")
 
@@ -181,7 +253,12 @@ class Chunk:
 
     @property
     def is_expensive(self) -> bool:
-        return any(re.search(rf"\b{re.escape(c)}\s*\(", self.code) for c in EXPENSIVE_CALLS)
+        # A CALL to a listed name. `\b` requires that the character before the name is
+        # not a letter, digit or underscore, so `my_cluster(` is out and
+        # `CATALYST::cluster(` is in; then the opening parenthesis must follow, which
+        # `cluster_ids(`, `count(df, cluster)` and `by = "cluster"` do not have.
+        src = strip_r_strings(self.code)
+        return any(re.search(rf"\b{re.escape(c)}\s*\(", src) for c in EXPENSIVE_CALLS)
 
     @property
     def is_reload(self) -> bool:
@@ -196,8 +273,21 @@ def parse_chunks(qmd_path: str) -> list[Chunk]:
     ```{r name, opt=val}. A single notebook does not mix them, but a project can
     contain both, so both are handled rather than requiring a conversion first.
     """
-    with open(qmd_path, encoding="utf-8") as fh:
-        lines = fh.read().split("\n")
+    try:
+        with open(qmd_path, encoding="utf-8") as fh:
+            text = fh.read()
+    except UnicodeDecodeError:
+        # A notebook saved in another encoding (one Latin-1 character in a comment is
+        # enough) used to end the command here with a traceback. Read it with U+FFFD
+        # in place of each invalid byte and say so. To stderr: notecheck reads chunk
+        # labels through this function and its --json output is on stdout.
+        with open(qmd_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        first = text.count("\n", 0, text.find("\ufffd")) + 1
+        print(f"figrun: {qmd_path} is not valid UTF-8 (first invalid byte on line "
+              f"{first}); reading it with U+FFFD in place of each invalid byte",
+              file=sys.stderr)
+    lines = text.split("\n")
 
     out, i, n = [], 0, len(lines)
     auto = 0
@@ -518,6 +608,11 @@ def cmd_list(chunks: list[Chunk], root: str, eid: str) -> int:
 def run(args) -> int:
     fc = figrun_config()
     apply_config(fc)
+    dropped = unguarded_defaults()
+    if dropped:
+        print(f"figrun: expensive_calls in {lkconfig._USER_CONFIG} replaces the default "
+              f"list, so chunks that call these are not guarded: {', '.join(dropped)} "
+              f"(expensive_calls_extra adds names and keeps the defaults)", file=sys.stderr)
     eid, qmd, root = _exp(args)
     chunks = _dedupe(parse_chunks(qmd))
     if not chunks:
@@ -936,7 +1031,36 @@ def verify(root, chunks, targets, started) -> int:
     if n_tables:
         what.append(f"{n_tables} table(s)")
     print(f"\nfigrun: verified {' and '.join(what)} into {os.path.basename(root)}/outputs")
+    hint = document_hint(root, {t for t, _, _, _ in ok})
+    if hint:
+        print(hint)
     return 0
+
+
+def document_hint(root: str, titles: set) -> str | None:
+    """One line naming the recorded decks and Word documents that embed a title this run
+    re-rendered: each now holds an older render than the newest, and `figtracer figsync
+    sync -y` puts the new one in place (docs/DOCUMENTS.md)."""
+    if not titles:
+        return None
+    try:
+        from figtracer import figsync
+        docs = figsync.resolve_documents(root, walk_up=True)
+    except Exception:
+        return None
+    eid = os.path.basename(os.path.normpath(root))
+    hits = []
+    for t, e in sorted(docs.items()):
+        if e.get("_missing"):
+            continue
+        used = sorted({s.get("title") for s in (e.get("sources") or [])
+                       if s.get("kind") == "figure" and s.get("exp", eid) == eid} & titles)
+        if used:
+            hits.append(f"{t} ({', '.join(used)})")
+    if not hits:
+        return None
+    return (f"  note: embedded in {len(hits)} deck(s)/document(s): {'; '.join(hits)}"
+            " — `figtracer figsync sync -y` refreshes them in place")
 
 
 def main(argv=None) -> int:

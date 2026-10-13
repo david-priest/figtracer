@@ -111,6 +111,56 @@ data_dir <- "{data_dir}"
 
 
 
+def _analysis_template(name: str, templates_dirs: list) -> tuple[str, str | None]:
+    """Resolve an opt-in analysis template to `<name>.qmd` and, if it ships one, its run plan.
+
+    Selected by name from a templates dir, the same `<templates_dir>/<name>.<ext>` rule the lab
+    note template follows. The configured dir is searched first and the bundled one second, so a
+    lab that keeps its own note templates still gets the notebooks that ship with the package.
+
+    A template is a pair: the notebook, and `<name>.runplan.json` naming the chunk sequences
+    that build, cluster and merge the object. The plan is optional; a template without one
+    scaffolds the notebook alone.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name or ""):
+        raise ValueError(
+            f"--analysis-template {name!r} is not a template name: use letters, digits, dash "
+            "and underscore only (the file is looked up as <name>.qmd).")
+    dirs = [d for d in dict.fromkeys(templates_dirs) if d]
+    for d in dirs:
+        qmd = os.path.join(d, name + ".qmd")
+        if os.path.isfile(qmd):
+            plan = os.path.join(d, name + ".runplan.json")
+            return qmd, (plan if os.path.isfile(plan) else None)
+    known = sorted({os.path.basename(f)[:-len(".qmd")]
+                    for d in dirs for f in glob.glob(os.path.join(d, "*.qmd"))})
+    raise ValueError(
+        f"--analysis-template {name!r}: no {name}.qmd in {' or '.join(dirs)}. "
+        f"Available: {', '.join(known) if known else '(none)'}")
+
+
+def _r_path(path: str) -> str:
+    """A path as it can sit inside a double-quoted R string: backslashes are escapes there."""
+    return path.replace("\\", "/")
+
+
+def _fill_runplan(template: str, mapping: dict) -> str:
+    """Fill a run-plan template and return it as JSON text.
+
+    Parsed before it is filled, not after: the plan is read by the Run Plan button, and a
+    placeholder value that needed escaping would otherwise produce a file it cannot open.
+    """
+    def fill(value):
+        if isinstance(value, str):
+            return _fill(value, mapping)
+        if isinstance(value, list):
+            return [fill(v) for v in value]
+        if isinstance(value, dict):
+            return {k: fill(v) for k, v in value.items()}
+        return value
+    return json.dumps(fill(json.loads(template)), indent=2, ensure_ascii=False) + "\n"
+
+
 def _ensure_here_marker(data_base, exp_id):
     """Write the `.here` file that anchors here::here() to THIS experiment.
 
@@ -168,10 +218,78 @@ def _ensure_render_gitignored(exp_root: str) -> None:
         fh.write(separator + block)
 
 
+def _ensure_checkpoints_gitignored(exp_root: str) -> None:
+    """Keep a template notebook's checkpoints out of git. The notebook saves the object as
+    ``.qs2`` under ``analysis/`` at each stage boundary; the files are large binaries, and
+    ``figtracer sync``'s ``git add -A`` would otherwise commit them. Its own idempotent block,
+    appended after the render-layer one and only when an analysis template is scaffolded, so a
+    plain scaffold's ``.gitignore`` is what it always was. Existing rules are never replaced."""
+    gi = os.path.join(exp_root, ".gitignore")
+    existing = ""
+    if os.path.exists(gi):
+        with open(gi) as fh:
+            existing = fh.read()
+    if "analysis/*.qs2" in {line.strip() for line in existing.splitlines()}:
+        return
+
+    block = (
+        "# analysis checkpoints: the object the notebook saves under analysis/ at each stage\n"
+        "# boundary. Large binaries, kept out of git.\n"
+        "analysis/*.qs2\n"
+    )
+    if not existing or existing.endswith("\n\n"):
+        separator = ""
+    else:
+        separator = "\n" if existing.endswith("\n") else "\n\n"
+    with open(gi, "a") as fh:
+        fh.write(separator + block)
+
+
+def _ensure_deck_gitignored(exp_root: str) -> None:
+    """Keep a built deck and its PNG cache out of git. A deck is 3 to 40 MB and is rebuilt
+    from its generator and the MANIFEST; `figtracer.deck.DeckBuild.record()` adds this block
+    on the first build, so a plain scaffold's ``.gitignore`` is what it always was. The
+    generator and the deck's MANIFEST record stay tracked. Existing rules are never
+    replaced."""
+    gi = os.path.join(exp_root, ".gitignore")
+    existing = ""
+    if os.path.exists(gi):
+        with open(gi) as fh:
+            existing = fh.read()
+    rules = {line.strip() for line in existing.splitlines()}
+    if "deck/*.pptx" in rules and "deck/png/" in rules:
+        return
+
+    block = (
+        "# figtracer decks: the built .pptx and its PNG cache are regenerable from the\n"
+        "# generator and the MANIFEST; the generator and the deck's record stay tracked.\n"
+        "deck/*.pptx\n"
+        "deck/png/\n"
+    )
+    if not existing or existing.endswith("\n\n"):
+        separator = ""
+    else:
+        separator = "\n" if existing.endswith("\n") else "\n\n"
+    with open(gi, "a") as fh:
+        fh.write(separator + block)
+
+
 def new(project: str, title: str, platform: str | None = None,
         cfg: dict | None = None, stamp: str | None = None,
-        existing_data: str | None = None, exp_id: str | None = None) -> dict:
+        existing_data: str | None = None, exp_id: str | None = None,
+        analysis_template: str | None = None) -> dict:
     p = config.project(project, cfg)
+    # An analysis template is opt-in and is resolved before anything is created, so a mistyped
+    # name is a clear error and not a half-scaffolded tree spread across the vault and the data
+    # root. Without it the notebook is the three-chunk stub, exactly as before.
+    template_qmd = template_plan = None
+    if analysis_template is not None:
+        if existing_data:
+            raise ValueError(
+                "--analysis-template writes a fresh notebook into analysis/ and cannot be "
+                "combined with --data-dir, which keeps the notebook the run folder already has.")
+        template_qmd, template_plan = _analysis_template(
+            analysis_template, [p.get("_templates_dir"), config._BUNDLED_TEMPLATES])
     now = datetime.strptime(stamp, "%Y-%m-%d") if stamp else datetime.now()
     date = now.strftime("%Y-%m-%d")
     day = now.strftime("%a %y%m%d")
@@ -192,6 +310,17 @@ def new(project: str, title: str, platform: str | None = None,
     # the first -- so the folders were being renamed by hand after every scaffold.
     # Generated ids keep the slug: `CMV-2026-09-04-A` alone says nothing about the work.
     folder_name = exp_id if explicit_id else f"{exp_id} {slug}"
+
+    # A template never replaces a notebook or a run plan that is already there. Checked here,
+    # before the note folder is made, for the same reason the template name is checked early.
+    if template_qmd:
+        target = os.path.join(p["data_root"], folder_name, "analysis")
+        clash = [f for f in (f"{exp_id}.qmd", f"{exp_id}.runplan.json")
+                 if os.path.exists(os.path.join(target, f))]
+        if clash:
+            raise ValueError(
+                f"--analysis-template: {target} already holds {' and '.join(clash)}; "
+                "the template is only written into an experiment that has no notebook yet.")
 
     # vault note folder + attachments. The hub is named as a **folder note** (stem == its
     # folder) so Obsidian folder-note plugins open it when you click the folder — the note's
@@ -269,19 +398,44 @@ def new(project: str, title: str, platform: str | None = None,
     })
     with open(note_path, "w") as fh:
         fh.write(note)
-    if not backfill and not os.path.exists(qmd_path):
+    runplan_path = None
+    if template_qmd:
+        # The notebook and its run plan are filled from the same mapping, so the plan's `qmd`
+        # names the notebook it sits beside. Paths go in as R strings: the experiment root for
+        # setwd() / here::i_am(), and the vault folder the merge canvas is read from.
+        mapping = {"exp_id": exp_id, "title": title, "platform": platform,
+                   "exp_root": _r_path(data_base), "note_dir": _r_path(note_folder)}
+        with open(template_qmd, encoding="utf-8") as fh:
+            body = _fill(fh.read(), mapping)
+        with open(qmd_path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        if template_plan:
+            runplan_path = os.path.join(analysis_dir, f"{exp_id}.runplan.json")
+            with open(template_plan, encoding="utf-8") as fh:
+                plan = _fill_runplan(fh.read(), mapping)
+            with open(runplan_path, "w", encoding="utf-8") as fh:
+                fh.write(plan)
+        _ensure_checkpoints_gitignored(data_base)
+    elif not backfill and not os.path.exists(qmd_path):
         with open(qmd_path, "w") as fh:
             fh.write(_qmd_stub(exp_id, title, data_dir, platform))
 
-    return {"experiment_id": exp_id, "note": note_path, "data_dir": data_dir,
-            "analysis_qmd": qmd_path, "exports_dir": exports_dir}
+    res = {"experiment_id": exp_id, "note": note_path, "data_dir": data_dir,
+           "analysis_qmd": qmd_path, "exports_dir": exports_dir}
+    # Reported only when a template was asked for, so a plain scaffold prints what it always did.
+    if template_qmd:
+        res["analysis_template"] = analysis_template
+        if runplan_path:
+            res["runplan"] = runplan_path
+    return res
 
 
 def run(args) -> int:
     cfg = config.load(args.config) if args.config else None
     res = new(args.project, args.title, platform=args.platform, cfg=cfg, stamp=args.stamp,
               existing_data=getattr(args, "data_dir", None),
-              exp_id=getattr(args, "exp_id", None))
+              exp_id=getattr(args, "exp_id", None),
+              analysis_template=getattr(args, "analysis_template", None))
     from . import index_cmd
     idx = index_cmd.rebuild(args.project, cfg=cfg)
     res["dashboard"] = idx.get("dashboard")

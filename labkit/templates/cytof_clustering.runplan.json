@@ -1,0 +1,74 @@
+{
+  "qmd": "{{exp_id}}.qmd",
+  "plans": [
+    {
+      "name": "1. Build from the FCS files, compensate and save the first checkpoint (fresh window)",
+      "chunks": [
+        "setup",
+        "constants",
+        "load-fcs",
+        "compensate",
+        "save-compensated"
+      ]
+    },
+    {
+      "name": "1b. Compensation check: the spill matrix and the uncompensated-against-compensated panels (in the session that ran plan 1; writes two PNGs, changes no object)",
+      "chunks": [
+        "comp-spillmat-plot",
+        "comp-check"
+      ]
+    },
+    {
+      "name": "2. Cluster, give every SOM node a level, embed in the UMAP and save the second checkpoint (fresh window)",
+      "chunks": [
+        "setup",
+        "constants",
+        "load-compensated",
+        "type-markers",
+        "cluster",
+        "dr",
+        "save"
+      ]
+    },
+    {
+      "name": "2b. Figures the merge canvas is authored from: pooled table, heatmap, UMAP by cluster, marker and sample, and stacked bars (after plan 2; reads the saved object and changes nothing)",
+      "chunks": [
+        "setup",
+        "constants",
+        "load",
+        "palette",
+        "cluster-pct",
+        "fig-cluster-heatmap",
+        "fig-umap-clusters",
+        "fig-umap-markers",
+        "fig-umap-by-sample",
+        "fig-umap-by-sample-facets",
+        "fig-umap-clusters-by-sample",
+        "fig-cluster-composition-by-sample"
+      ]
+    },
+    {
+      "name": "3. Merge the clusters from the canvas and save (after the canvas is edited; fresh window)",
+      "chunks": [
+        "setup",
+        "constants",
+        "load",
+        "merge",
+        "save"
+      ]
+    },
+    {
+      "name": "4. Figures of the merged labels: pooled table, heatmap, labelled UMAP, UMAP by sample and stacked bars (after plan 3; reads the saved object and changes nothing)",
+      "chunks": [
+        "setup",
+        "constants",
+        "load",
+        "merged-palette",
+        "fig-merged-heatmap",
+        "fig-umap-merged",
+        "fig-umap-merged-by-sample",
+        "fig-merged-composition-by-sample"
+      ]
+    }
+  ]
+}

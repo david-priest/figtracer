@@ -11,6 +11,7 @@ data_dir: "{{data_dir}}"
 analysis_qmd: "{{analysis_qmd}}"
 exports_dir: "{{exports_dir}}"
 runs: 0                     # acquisitions under runs/ — `figtracer run sync` maintains this
+notecheck_sections: [Analysis, Conclusions]   # notecheck checks numbers under these headings only; delete the line to check the whole note
 git_commit:                 # filled from f2 MANIFEST once figures are made
 created: {{date}}
 updated: {{date}}
@@ -56,9 +57,13 @@ _What did we learn? Next experiment?_
 
 ### Carry-forward to the next run
 
+<!-- notecheck:off -->
+
 _Flags the next run must act on: protocol changes, budget adjustments, controls that failed, things to test. **One bullet per flag, each stating the action, not just the observation.** If a flag has been made durable elsewhere (a `Protocols/derived/*.md` step, a `protocol.yaml` change), link it here — this section is the index, not the only copy._
 
 _Read every prior run's carry-forward before authoring the next `protocol.yaml` (see the `figtracer-experiment` skill, lifecycle step 2)._
+
+<!-- notecheck:on -->
 
 ## Runs
 

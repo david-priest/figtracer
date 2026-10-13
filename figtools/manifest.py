@@ -48,6 +48,11 @@ def _iter_entries(manifest_path: str):
             fig = rec.get("rel_path") or rec.get("fig")
             if not fig:
                 continue
+            # A deck or a Word document is recorded in the same file (docs/MANIFEST.md)
+            # and is not a panel: `fig doctor` must not count it as a figure with no
+            # usable render. Compared as a string, since figtools does not import figtracer.
+            if rec.get("kind") in ("deck", "document"):
+                continue
             yield rec, os.path.join(folder, fig)
 
 

@@ -83,6 +83,20 @@ To connect an existing run instead of creating empty data folders:
 figtracer new "existing pilot" --project DEMO --data-dir "/path/to/existing/run"
 ```
 
+### Start from an analysis template
+
+`--analysis-template <name>` replaces the three-chunk stub with a notebook shipped in `labkit/templates/`. One ships today, for a CyTOF clustering analysis:
+
+```bash
+figtracer new "T cell clustering" --project DEMO --id DEMO-clustering --analysis-template cytof_clustering
+```
+
+This writes `analysis/DEMO-clustering.qmd` and, beside it, `analysis/DEMO-clustering.runplan.json`. The notebook holds the standard chunks in order: build one object from the FCS files, compensate and check the compensation, count the events per sample, cluster and embed, describe the clusters (the pooled percentage table, the heatmap the merge canvas is authored from, UMAPs by cluster, marker and sample, and the composition of each sample), merge the clusters from the canvas, and repeat the figures on the merged labels. Two checkpoints separate the chunks that change the object from the chunks that only read it. The run plan names the chunk sequences that change it (build, cluster and embed, merge), so each can be run in one step and in the right order, and two that only read a checkpoint: the figures the merge canvas is authored from, and the figures of the merged labels. Every chunk it names is a label in the notebook. The experiment's `.gitignore` gains `analysis/*.qs2`, so the checkpoints are not committed.
+
+The experiment id, the experiment root and the vault folder the merge canvas is read from are filled in when the notebook is written, so pass `--id` and scaffold under the name the experiment will keep. Everything else that is specific to the experiment is a constant marked `TODO` in the notebook's `constants` chunk: the input paths (relative to the experiment root; the panel and metadata sheets are read as `.csv` or `.xlsx`, whichever is there), the sample column (`condition` by default), the population name used in figure titles, the type-marker list, `K_MAX` and the clustering level, and `UMAP_CELLS`. Those with no safe default stop the chunk that needs them until they are set, so the clustering cannot run on the placeholder marker list.
+
+`--analysis-template` cannot be combined with `--data-dir`, and it does not replace a notebook that already exists. A template is looked up by name as `<name>.qmd`, with an optional `<name>.runplan.json`, first in the configured `templates_dir` and then among the bundled ones. Like the stub, `cytof_clustering` calls `seekit` and CATALYST. Without the option, `figtracer new` writes the stub exactly as before.
+
 ## Run the living-document loop
 
 1. **Analyse.** Work in the generated `.qmd`, `.ipynb`, or script using the plotting tools you
@@ -120,8 +134,7 @@ indicates confirmation is required. Run `figtracer <command> -h` for the exact o
 - `figtracer notecheck --exp <ID>` — every number in the experiment's notes must exist in its
   current outputs; `--where <value>` names the chunk or table that produced one. `figtracer sync`
   runs it before committing.
-- `figtracer fig <subcommand>` — inspect, normalize, assemble, check, render, verify, embed, or
-  watch figures.
+- `figtracer fig <subcommand>` — inspect, normalize, assemble, check, render, rasterise, verify, embed, or watch figures.
 - `figtracer data` — scan and register analysis objects.
 - `figtracer doctor` — apply profile-aware checks to analysis documents; see
   [Analysis doctor](ANALYSIS_DOCTOR.md).

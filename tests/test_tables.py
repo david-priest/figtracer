@@ -125,6 +125,30 @@ def test_long_tables_are_capped_with_a_pointer_to_the_file(tmp_path):
 
 
 
+def test_the_table_is_set_off_from_its_markers_by_blank_lines(tmp_path):
+    # Obsidian shows raw pipes when a table starts on the line after an HTML comment.
+    data, _, note = _exp(tmp_path)
+    _place(data, note, "medians")
+    text = open(note, encoding="utf-8").read()
+    begin, end = figsync._table_markers("EXP", "medians")
+    assert f"{begin}\n\n| donor | arm | value |" in text
+    assert f"| D2 | control | 0.13 |\n\n{end}" in text
+
+
+def test_sync_rewrites_a_block_written_without_blank_lines(tmp_path):
+    data, _, note = _exp(tmp_path)
+    begin, end = figsync._table_markers("EXP", "medians")
+    body = figsync._table_body(os.path.join(data, "outputs", "medians.csv"))
+    with open(note, "w", encoding="utf-8") as f:
+        f.write(f"Intro prose.\n\n{begin}\n{body}\n{end}\n\n# Log\n- entry\n")
+    r = figsync.materialize_tables(figsync.resolve_tables(data, walk_up=False), "EXP", [note], execute=True)
+    assert r["synced"] == ["medians"]
+    text = open(note, encoding="utf-8").read()
+    assert f"{begin}\n\n{body}\n\n{end}" in text and text.count(begin) == 1
+    r = figsync.materialize_tables(figsync.resolve_tables(data, walk_up=False), "EXP", [note], execute=True)
+    assert r["current"] == ["medians"]                        # stable once rewritten
+
+
 def test_pipes_in_cells_are_escaped_in_the_block(tmp_path):
     data, _, note = _exp(tmp_path, rows=("D1,a|b,1",))
     _place(data, note, "medians")

@@ -45,7 +45,9 @@ labkit = ["templates/*", "config/*.yaml"]
 # matplotlib is a TEST-only dep: it drives the real figure through the end-to-end loop
 # (savefig -> assemble -> note); figtracer itself duck-types plotting objects and never
 # imports it. Tests that use it `importorskip`, so the suite still runs without it.
-dev = ["pytest>=8", "matplotlib>=3"]
+# python-pptx likewise: `figtracer.deck` duck-types the shapes a builder hands it, and one
+# test builds a real deck through that API to read it back.
+dev = ["pytest>=8", "matplotlib>=3", "python-pptx>=1.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

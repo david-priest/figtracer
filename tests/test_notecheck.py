@@ -701,3 +701,269 @@ def test_where_answers_for_one_value(tmp_path, monkeypatch, capsys):
     assert notecheck.main(["--exp", "EXP01", "--where", "56.3"]) == 0
     assert "session.log:medians" in capsys.readouterr().out
     assert notecheck.main(["--exp", "EXP01", "--where", "650"]) == 1
+
+
+# --- a note says which of its numbers are claims about the analysis ---------------
+#
+# A wet-lab note is mostly bench record. On one, 82 numbers were reported and the few that
+# mattered were lost among volumes, g-forces, clock times and an instrument's own event counts;
+# six were "stale" only because a bench number happened to equal one from a superseded run. The
+# way through was --allow-note-drift every time, and an override that is always needed stops
+# meaning anything.
+
+BENCH_BODY = """
+# EXP1 — a synthetic run
+
+**Design:** D1 and D2, treated against control, 6 wells.
+
+## 1. Panel / design
+
+Stained in 55 uL at 300 x g; cat. no. 555896.
+
+## 2. Staining / acquisition
+
+<!-- figtracer:runs:begin -->
+Acquired 250,000 events per well; the chunk was 209 lines long.
+<!-- figtracer:runs:end -->
+
+## 3. Analysis
+
+Of 48 cells, 28.7% were positive; an earlier pass gave 910 tests.
+
+### 3.1 Clusters
+
+We kept 46 clusters.
+
+## 4. Conclusions
+
+The treated wells held 37 more cells than control.
+
+# Log
+
+## Sun 260907
+
+Ran 471 tests.
+"""
+BENCH_LOG = ("# ── Session log 2026-01-01 10:00:00 ── #\n910 tests across 3 groups\n"
+             "# ── Session log 2026-02-02 11:00:00 ── #\n650 tests across 2 groups\n")
+
+
+def _bench(tmp_path, fm, **kw):
+    """check_note on the bench note above, under the given frontmatter."""
+    out, logp = _exp(tmp_path, {"c.csv": "n,frac\n48,0.287\n"}, log=BENCH_LOG)
+    corpus = notecheck.build_corpus(out, logp)
+    return notecheck.check_note(_note(tmp_path, BENCH_BODY, "---\n" + fm + "---\n"), corpus, **kw)
+
+
+def test_a_note_without_the_key_or_markers_is_checked_exactly_as_before(tmp_path):
+    """Pinned from the release before `notecheck_sections:` and the off/on markers existed.
+
+    Whole dictionaries, not just values: the line numbers, the stale attribution and the
+    suppression reason are all part of what a caller reads.
+    """
+    def item(line, value, context, check="unsourced-number", **extra):
+        return {"check": check, "level": "error", "note": "note.md", "line": line,
+                "value": value, "context": context, **extra}
+
+    bench = "Stained in 55 uL at 300 x g; cat. no. 555896."
+    events = "Acquired 250,000 events per well; the chunk was 209 lines long."
+    findings, suppressed = _bench(tmp_path, "experiment_id: EXP1\nrole: hub\nnotecheck_ignore: [209]\n")
+    assert findings == [
+        item(9, "6", "**Design:** D1 and D2, treated against control, 6 wells."),
+        item(13, "55", bench),
+        item(13, "300", bench),
+        item(18, "250,000", events),
+        item(23, "910", "Of 48 cells, 28.7% were positive; an earlier pass gave 910 tests.",
+             check="stale-number", last_seen="2026-01-01 10:00:00",
+             detail="produced by a superseded run (2026-01-01 10:00:00); not by the current one"),
+        item(27, "46", "We kept 46 clusters."),
+        item(31, "37", "The treated wells held 37 more cells than control."),
+    ]
+    assert suppressed == [item(18, "209", events, suppression="notecheck_ignore in note frontmatter")]
+
+
+def test_clock_times_and_dates_are_not_numbers(tmp_path):
+    """"12:49" is not the numbers 12 and 49, a date is not a month and a day, and "2 h 10 min"
+    is one duration. Checked, a part is either noise or a match that verified nothing."""
+    note = tmp_path / "n.md"
+    note.write_text("Acquired on 2026-10-07 from 12:49 to 15:49, exported 2026-10-07T16:37:05 "
+                    "after a run of 2 h 10 min; warmed 9:05 to 9:20, then 10 min 30 s on ice. "
+                    "We kept 46 events.\n", encoding="utf-8")
+    assert [t for _, t, _, _ in notecheck.note_numbers(str(note))] == ["46"]
+
+
+def test_a_ratio_or_a_lone_duration_is_still_a_number(tmp_path):
+    """The exclusion must not reach past clock times and dilutions: a number it swallowed would
+    pass unseen. A ratio whose left side is not exactly 1, or whose right side is not whole
+    digits, is still two numbers."""
+    note = tmp_path / "n.md"
+    note.write_text("Mixed 3:1 and 2:5, then 11:100 and 1:2.5; spun 10 min; scored 24:10.\n",
+                    encoding="utf-8")
+    tokens = [t for _, t, _, _ in notecheck.note_numbers(str(note))]
+    assert tokens == ["3", "1", "2", "5", "11", "100", "1", "2.5", "10", "24", "10"]
+
+
+def test_a_dilution_is_bench_notation_at_any_length(tmp_path):
+    """Under the clock-time rule alone "1:50" was skipped and "1:100" was checked, so whether a
+    titre was checked depended on how many digits it had."""
+    note = tmp_path / "n.md"
+    for dilution in ("1:50", "1:100", "1:2,000"):
+        note.write_text(f"Stained at {dilution} and kept 46 beads.\n", encoding="utf-8")
+        assert [t for _, t, _, _ in notecheck.note_numbers(str(note))] == ["46"], dilution
+    note.write_text("Mixed 3:1 and kept 46 beads.\n", encoding="utf-8")
+    assert [t for _, t, _, _ in notecheck.note_numbers(str(note))] == ["3", "1", "46"]
+    # A dash before the far end of a range is read as a sign; it must not leave a "-1" behind.
+    note.write_text("Titrated 1:50 –1:200 and kept 46 beads.\n", encoding="utf-8")
+    assert [t for _, t, _, _ in notecheck.note_numbers(str(note))] == ["46"]
+
+
+def test_notecheck_sections_limits_the_check_to_the_listed_headings(tmp_path):
+    findings, suppressed = _bench(
+        tmp_path, "notecheck_sections: [Analysis, Conclusions]\nnotecheck_ignore: [209]\n")
+    # 46 sits under "### 3.1 Clusters": a listed heading covers its subsections. The design
+    # line, the bench sections and the Log are outside the scope.
+    assert [(f["check"], f["value"]) for f in findings] == [
+        ("stale-number", "910"), ("unsourced-number", "46"), ("unsourced-number", "37")]
+    assert suppressed == [], "a number outside the scope is not checked, so not suppressed either"
+
+
+def test_a_section_is_matched_without_its_number_or_its_case(tmp_path):
+    """A key written "7. analysis" finds "## 3. Analysis", so renumbering a note's sections does
+    not empty its scope. A heading at the same level closes the section: Conclusions is not
+    listed here, so 37 is not checked."""
+    findings, _ = _bench(tmp_path, 'notecheck_sections: ["7. analysis"]\n')
+    assert [f["value"] for f in findings] == ["910", "46"]
+
+
+def test_a_listed_section_with_no_heading_is_a_finding_not_a_silent_pass(tmp_path):
+    """A scope naming a heading that was since renamed checks nothing there. Reported for
+    the reason an unresolved `notecheck_notes:` path is: a section believed to be checked."""
+    findings, _ = _bench(tmp_path, "notecheck_sections: [Analysis, Results]\n")
+    assert [(f["check"], f["value"]) for f in findings] == [
+        ("missing-section", "Results"), ("stale-number", "910"), ("unsourced-number", "46")]
+
+
+def test_include_log_still_reaches_the_log_of_a_scoped_note(tmp_path):
+    findings, _ = _bench(tmp_path, "notecheck_sections: [Analysis]\n", include_log=True)
+    assert [f["value"] for f in findings] == ["910", "46", "471"]
+
+
+OPTED_OUT = """Of 48 cells we kept 46.
+
+<!-- notecheck:off -->
+The instrument's own export counted 250,000 events, 12.5% of them in the gate, and 48 beads.
+<!-- notecheck:on -->
+
+A further 37 were lost; the supplier's sheet <!-- notecheck:off --> quotes 81.4 <!-- notecheck:on --> and we measured 55.
+"""
+
+
+def test_numbers_between_the_off_and_on_markers_are_suppressed_not_reported(tmp_path):
+    out, log = _exp(tmp_path, {"c.csv": "n\n48\n"})
+    corpus = notecheck.build_corpus(out, log)
+    attribution = []
+    findings, suppressed = notecheck.check_note(_note(tmp_path, OPTED_OUT), corpus,
+                                                attribution=attribution)
+    assert [f["value"] for f in findings] == ["46", "37", "55"]
+    # Counted, with the reason, so the opt-out stays visible. The 48 inside the block is in
+    # the outputs, so there was nothing to suppress -- and it is not attributed to them either.
+    assert [(s["line"], s["value"]) for s in suppressed] == [(4, "250,000"), (4, "12.5"), (7, "81.4")]
+    assert {s["suppression"] for s in suppressed} == {"notecheck:off block in the note"}
+    assert [(a["line"], a["value"]) for a in attribution] == [(1, "48")]
+
+
+def test_an_unclosed_off_marker_runs_to_the_end_of_the_note(tmp_path):
+    out, log = _exp(tmp_path, {})
+    corpus = notecheck.build_corpus(out, log)
+    findings, suppressed = check(tmp_path, "A 46.\n<!-- notecheck:off -->\nB 37.\n\nC 55.\n", corpus)
+    assert [f["value"] for f in findings] == ["46"]
+    assert [s["value"] for s in suppressed] == ["37", "55"]
+
+
+def test_a_marker_quoted_as_code_switches_nothing_off(tmp_path):
+    out, log = _exp(tmp_path, {})
+    corpus = notecheck.build_corpus(out, log)
+    body = "Wrap it in `<!-- notecheck:off -->` like so:\n\n```\n<!-- notecheck:off -->\n```\n\nWe kept 46.\n"
+    findings, suppressed = check(tmp_path, body, corpus)
+    assert [f["value"] for f in findings] == ["46"] and suppressed == []
+
+
+def test_the_report_states_the_scope_and_counts_what_a_block_suppressed(tmp_path, monkeypatch, capsys):
+    out, _ = _exp(tmp_path, {"c.csv": "n\n48\n"})
+    hub = tmp_path / "EXP1.md"
+    hub.write_text("---\nnotecheck_sections: [Analysis]\n---\n"
+                   "## 2. Staining / acquisition\n\nStained in 55 uL.\n\n"
+                   "## 3. Analysis\n\nOf 48 cells we kept 46.\n\n"
+                   "<!-- notecheck:off -->\nThe export counted 250,000 events.\n<!-- notecheck:on -->\n",
+                   encoding="utf-8")
+    monkeypatch.setattr(notecheck, "_experiment", lambda exp=None, cwd=None: {
+        "experiment_id": "EXP1", "exports_dir": out, "_note": str(hub)})
+    r = notecheck.diagnose(exp="EXP1")
+    assert [f["value"] for f in r["findings"]] == ["46"]
+    assert r["summary"] == {"notes": 1, "documents": 0, "unsourced": 1, "stale": 0,
+                            "document_findings": 0, "suppressed": 1}
+    assert r["documents"] == [{"note": "EXP1.md", "findings": 1, "suppressed": 1,
+                               "sections": ["Analysis"]}]
+    assert notecheck.main(["--exp", "EXP1"]) == 0
+    printed = capsys.readouterr().out
+    assert "EXP1.md: only Analysis checked" in printed
+    assert "1 unsourced, 1 suppressed" in printed
+
+
+def _scaffolded(tmp_path, edit):
+    """A wet-lab note scaffolded from the shipped template, with `edit(text)` applied to it."""
+    from labkit import scaffold
+    cfg = {"vault_root": str(tmp_path / "vault"),
+           "templates_dir": os.path.join(os.path.dirname(scaffold.__file__), "templates"),
+           "projects": {"DEMO": {"vault_dir": "Experiments", "data_root": str(tmp_path / "data"),
+                                 "default_platform": "CyTOF", "template": "wetlab_experiment",
+                                 "dashboard": "DEMO/Mission Control.md"}}}
+    note = scaffold.new("DEMO", "A synthetic assay", cfg=cfg, stamp="2026-09-07", exp_id="EXP1")["note"]
+    with open(note, encoding="utf-8") as fh:
+        text = fh.read()
+    with open(note, "w", encoding="utf-8") as fh:
+        fh.write(edit(text))
+    return note
+
+
+CLAIM = "_What did we learn? Next experiment?_"       # the template's Conclusions placeholder
+
+
+def test_a_scaffolded_wetlab_note_checks_only_analysis_and_conclusions(tmp_path):
+    """The shipped template sets the scope, and its own headings satisfy it."""
+    from labkit import config as lkconfig
+    bench = "_Date stained, instrument, run notes, QC._"
+
+    def edit(text):
+        assert bench in text and CLAIM in text
+        text = text.replace(bench, "Stained in 55 uL at 300 x g from 12:49; 250,000 events.")
+        return text.replace(CLAIM, "The treated wells held 37 more cells than control.")
+
+    note = _scaffolded(tmp_path, edit)
+    assert lkconfig.read_frontmatter(note)["notecheck_sections"] == ["Analysis", "Conclusions"]
+    findings, _ = notecheck.check_note(note, notecheck.Corpus())
+    values = {f["value"] for f in findings}
+    assert "37" in values
+    assert not values & {"55", "300", "250,000", "12", "49"}
+    assert not [f for f in findings if f["check"] == "missing-section"]
+
+
+def test_carry_forward_in_a_scaffolded_note_is_exempt_and_conclusions_is_not(tmp_path):
+    """Carry-forward sits under Conclusions, so it is in scope, and what people write there is
+    bench values for the next run. The template wraps its body in the off/on markers; a claim
+    typed directly under "## 4. Conclusions" is outside them and still checked."""
+    on = "<!-- notecheck:on -->"
+
+    def edit(text):
+        assert CLAIM in text and text.count(on) == 1
+        # The block opens after the heading and closes before the next one.
+        assert (text.index("### Carry-forward") < text.index("<!-- notecheck:off -->")
+                < text.index(on) < text.index("## Runs"))
+        text = text.replace(CLAIM, "The treated wells held 37 more cells than control.")
+        return text.replace(on, "- Spin at 300 x g for 5 min in 55 uL next run.\n\n" + on)
+
+    note = _scaffolded(tmp_path, edit)
+    findings, suppressed = notecheck.check_note(note, notecheck.Corpus())
+    assert [f["value"] for f in findings] == ["37"]
+    assert {"300", "5", "55"} <= {s["value"] for s in suppressed}
+    assert {s["suppression"] for s in suppressed} == {"notecheck:off block in the note"}
