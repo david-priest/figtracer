@@ -40,6 +40,8 @@ All notable changes to figtracer are documented here. The format is based on
 
 ### Fixed
 
+- `figtracer deck check` and `figtracer document check` no longer exit on a machine with no project registry (CI, a fresh install): the number check reports that it could not resolve the scope and the embeds are still checked. `notecheck.diagnose()` raises `ValueError` for a missing registry, as it does for a missing experiment, instead of exiting.
+
 - `figtracer deck check` and `figtracer document check` resolve each tag's own experiment through the vault, as `figsync drift` does. Under `--project` every tag of another experiment read UNKNOWN EXP: a manuscript recorded at its project tags figures from the experiments it draws on, and the GateLab manuscript's six all did.
 
 - A deck or Word document addresses a table by its title whatever channel it was saved with (`figsync.resolve_tables(channel=None)`, newest first). `figtracer document tag --table` and `DeckBuild.table()` found only tables saved with `channel = "note"`, and a manuscript's table saved with `channel = "manuscript"` was reported as having no CSV. A note's table blocks still take the note channel.

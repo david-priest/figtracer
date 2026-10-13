@@ -279,6 +279,25 @@ def test_cli_check_record_and_inspect(tmp_path, monkeypatch, capsys):
     assert deckmod.main(["record", path, "--title", "x"]) == 2    # no scope
 
 
+def test_cli_check_still_reports_embeds_without_a_project_registry(tmp_path, monkeypatch, capsys):
+    """A runner with no ~/.config/labkit/projects.yaml exits from the config loader; the
+    number check reports that it could not run and the embeds are still checked."""
+    from figtracer import notecheck
+    root = _exp(tmp_path)
+    outputs = str(root / "outputs")
+    monkeypatch.setattr(embeds, "scope", lambda args: ("EXP", outputs, str(root), True))
+    monkeypatch.setattr(notecheck.lkconfig, "load",
+                        lambda path=None: (_ for _ in ()).throw(SystemExit("labkit: no project registry found")))
+    path = _status_deck(root)
+    embeds.record(path, outputs=outputs, title="status", scope="EXP")
+    assert deckmod.main(["check", "--exp", "EXP"]) == 1
+    out = capsys.readouterr().out
+    assert "numbers: not checked (labkit: no project registry found)" in out
+    assert "[STALE FIGURE]  slide 1  EXP:UMAP_merged" in out
+    with pytest.raises(ValueError, match="no project registry"):
+        notecheck.diagnose(exp="EXP")
+
+
 # ── the real thing ────────────────────────────────────────────────────────────
 
 def test_a_deck_built_with_python_pptx_reads_back_tagged(tmp_path, capsys):
