@@ -663,8 +663,10 @@ def _experiment(exp: str | None, cwd: str | None = None) -> dict:
     it and re-raise as a ValueError the caller can report against the ID that caused it.
     """
     from figtracer import sync as ftsync
-    cfg = lkconfig.load()
     try:
+        # `lkconfig.load()` exits the same way when there is no project registry at all
+        # (CI, a fresh install), and a library call must report that, not exit.
+        cfg = lkconfig.load()
         return ftsync.resolve(cfg, exp=exp, cwd=cwd)
     except SystemExit as e:                       # noqa: PERF203 - one call, one catch
         raise ValueError(str(e) or f"could not resolve experiment {exp!r}") from e

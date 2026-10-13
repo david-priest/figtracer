@@ -488,8 +488,10 @@ def cmd_check(args) -> int:
         for f in res["findings"]:
             if f.get("document"):
                 numbers.setdefault(f["note"], []).append(f)
-    except ValueError as exc:
-        numbers_error = str(exc)
+    except (ValueError, SystemExit) as exc:
+        # A machine with no project registry (CI, a fresh install) cannot resolve the scope
+        # for the number check; the embeds are still checked, and the line says why not.
+        numbers_error = str(exc) or "the scope could not be resolved"
     problems = 0
     for title, e in sorted(docs.items()):
         fstate = file_status(e)
