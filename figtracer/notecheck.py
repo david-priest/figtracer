@@ -97,8 +97,8 @@ DASHES = "–—"
 # a software version is never a result. The lookbehind already rejects the rest of the token,
 # so skipping the head skips the whole thing. A sentence-ending "0.9954." is unaffected, since
 # what follows its full stop is a space.
-# How many decimal places the corpus indexes. See Corpus for why this is not 4.
-DECIMALS = 6
+# How many decimal places the corpus indexes. See Corpus for why this is not 4, or 6.
+DECIMALS = 10
 
 NUM = re.compile(
     # The trailing guard rejects a comma only when a digit follows it. Rejecting every comma
@@ -214,6 +214,9 @@ def _strip_note(text: str, include_log: bool = False) -> str:
     text = re.sub(r"!\[\[[^\]]*\]\]", "", text)                     # embeds (|720 widths)
     text = re.sub(r"\[\[[^\]]*\]\]", "", text)                      # wikilinks
     text = re.sub(r"\]\([^)]*\)", "]", text)                        # md link targets
+    # The line figsync writes under a placed table cut at its row limit: its count is of rows
+    # left out, not a result, and it was reported as unsourced under every long table.
+    text = re.sub(r"(?m)^_… \d+ more row\(s\); the full table is .*$", "", text)
     return text
 
 
@@ -379,6 +382,13 @@ class Corpus:
     Six, not four. A concordance near 1 says nothing at four: 0.999871 and 0.99912 both
     round to 0.9999. A manuscript quoting five decimals then has every one of those figures
     reported as unsourced while it sits in the corpus.
+
+    Ten, not six. A small p-value written in plain decimals at four significant figures,
+    "0.0005379", has seven places, and a token deeper than the index was looked up unrounded
+    in the six-place table, where nothing is ever that precise: every such value in a placed
+    table was reported as unsourced (2026-10-20, 27 in one note). Ten places covers four
+    significant figures down to 1e-6; below that R writes e-notation, which is not read as a
+    number at all. A token deeper still is compared at the deepest place indexed.
     """
 
     def __init__(self) -> None:
@@ -428,8 +438,8 @@ class Corpus:
             v = to_float(token)
         except ValueError:
             return None
-        d = len(token.split(".")[1]) if "." in token else 0
-        return self.hist[min(d, 4)].get(v)
+        d = min(len(token.split(".")[1]) if "." in token else 0, DECIMALS)
+        return self.hist[d].get(round(v, d))
 
     def match(self, token: str, is_percent: bool = False) -> set[str] | None:
         """Sources that can produce `token` at its own precision, or None."""
@@ -438,7 +448,9 @@ class Corpus:
         except ValueError:
             return None
         d = len(token.split(".")[1]) if "." in token else 0
-        hit = self.index[min(d, DECIMALS)].get(v)
+        # Rounded to the place it is looked up at: unrounded, a token deeper than the index
+        # can never equal a key in it.
+        hit = self.index[min(d, DECIMALS)].get(round(v, min(d, DECIMALS)))
         if hit:
             return hit
         # A percentage in the note may be a proportion in the output. Gated on the
