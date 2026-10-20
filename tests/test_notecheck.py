@@ -582,6 +582,46 @@ def test_a_percentage_is_matched_at_its_own_precision():
     assert not c.match("84.30", is_percent=True)
 
 
+def test_a_small_p_value_in_plain_decimals_is_sourced(tmp_path):
+    """"0.0005379" has seven decimal places, one deeper than the corpus once indexed, and
+    was looked up unrounded in the six-place table: every such p-value in a placed table
+    was reported as unsourced."""
+    out, log = _exp(tmp_path, {"tests.csv": "term,p\nB1,0.0005379\nB2,0.0001688\n"})
+    corpus = notecheck.build_corpus(out, log)
+    findings, _ = check(tmp_path, "B1 p 0.0005379 and B2 p 0.0001688.", corpus)
+    assert findings == []
+
+
+def test_a_small_p_value_is_still_matched_at_its_own_precision():
+    c = notecheck.Corpus()
+    c.add(0.0005379, "tests.csv")
+    assert not c.match("0.0005381")             # a different value must not match
+
+
+def test_a_superseded_value_deeper_than_four_places_is_reported_as_stale(tmp_path):
+    """The superseded-run lookup was capped at four places, so a five-place value from an
+    older run read as unsourced rather than stale."""
+    log = (
+        "# ── Session log 2026-01-01 10:00:00 ── #\nD1 ratio 0.01235\n"
+        "# ── Session log 2026-02-02 11:00:00 ── #\nD1 ratio 0.02417\n"
+    )
+    out, logp = _exp(tmp_path, {}, log=log)
+    corpus = notecheck.build_corpus(out, logp)
+    findings, _ = check(tmp_path, "D1 ratio 0.01235.", corpus)
+    assert [f["check"] for f in findings] == ["stale-number"]
+
+
+def test_the_footer_under_a_truncated_placed_table_is_not_scanned(tmp_path):
+    """figsync writes "_… N more row(s) ..._" under a table cut at its row limit. N is a
+    count of rows left out, and was reported as unsourced under every long table."""
+    out, log = _exp(tmp_path, {"pairs.csv": "a,b,rho\nD1,D2,0.5\n"})
+    corpus = notecheck.build_corpus(out, log)
+    body = "| a | b | rho |\n| --- | --- | --- |\n| D1 | D2 | 0.5 |\n" \
+           "_… 301 more row(s); the full table is `outputs/pairs.csv`_\n"
+    findings, _ = check(tmp_path, body, corpus)
+    assert findings == []
+
+
 # --- the corpus is current PER CHUNK, not per run ---------------------------------
 
 FULL = ("# ── Session log 2026-01-01 10:00:00 ── #\n"
