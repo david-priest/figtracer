@@ -475,11 +475,18 @@ def _ledgers(outputs_dir: str) -> list[str]:
 
 
 def build_corpus(outputs_dir: str, session_log: str | None, corpus: Corpus | None = None,
-                 qmd_labels: set[str] | None = None) -> Corpus:
+                 qmd_labels: set[str] | None = None,
+                 notebook_labels: dict[str, set[str]] | None = None) -> Corpus:
     """Root-level CSVs, the protocol and run ledgers, and session.log current PER CHUNK.
 
     `qmd_labels`, when given, is the set of chunk labels the notebook still has: a chunk
     that ran once and was since deleted has no current output, so its values are history.
+
+    `notebook_labels`, when given, maps each notebook in the analysis folder to its chunk
+    labels. Several notebooks can append to one session.log. A run whose header names
+    its notebook is current per (notebook, chunk), and is checked against that notebook's
+    labels; a run that names none is checked against every notebook's, so a chunk of a
+    second notebook is not taken for a deleted chunk of the first.
     """
     c = corpus or Corpus()
     for p in _ledgers(outputs_dir):
@@ -506,34 +513,66 @@ def build_corpus(outputs_dir: str, session_log: str | None, corpus: Corpus | Non
     if session_log:
         all_runs = sessionlog.runs(session_log)
         c.n_runs += len(all_runs)
-        # Per chunk: the NEWEST run that ran it is current, every earlier one is history.
-        latest: dict[str, tuple[str, list[str]]] = {}
-        for run in all_runs:
+        # Per (notebook, chunk): the NEWEST run that ran it is current, every earlier one
+        # is history. A run whose header names no notebook is keyed on None, which is the
+        # whole of the key for every log written before seekit-dev #53.
+        latest: dict[tuple[str | None, str], tuple[int, str, list[str]]] = {}
+        for i, run in enumerate(all_runs):
+            nb = run.notebook
             for label in dict.fromkeys(run.chunk_labels):
-                if label in latest:
+                key = (nb, label)
+                if key in latest:
                     c.n_old_runs += 1
-                    c.add_hist_text("\n".join(latest[label][1]), latest[label][0])
-                latest[label] = (run.stamp, sessionlog.chunk(run, label) or [])
+                    c.add_hist_text("\n".join(latest[key][2]), latest[key][1])
+                latest[key] = (i, run.stamp, sessionlog.chunk(run, label) or [])
+        # A chunk whose last unattributed run is older than a run that names a notebook
+        # has been run since by a notebook that says who it is: the unattributed output
+        # is history. This is the switch-over, once per chunk label.
+        named_last: dict[str, int] = {}
+        for (nb, label), (i, _, _) in latest.items():
+            if nb is not None:
+                named_last[label] = max(i, named_last.get(label, -1))
+        for (nb, label) in [k for k in latest if k[0] is None]:
+            i, stamp, lines = latest[(nb, label)]
+            if named_last.get(label, -1) > i:
+                c.n_old_runs += 1
+                c.add_hist_text("\n".join(lines), stamp)
+                del latest[(nb, label)]
+        every_label = (set().union(*notebook_labels.values())
+                       if notebook_labels else None)
         current_chunks = 0
-        for label, (stamp, lines) in latest.items():
-            if qmd_labels is not None and label not in qmd_labels:
+        for (nb, label), (_, stamp, lines) in latest.items():
+            if nb is None:
+                known = every_label if every_label is not None else qmd_labels
+            elif notebook_labels is not None and nb in notebook_labels:
+                known = notebook_labels[nb]
+            else:
+                # A notebook this folder does not hold: its chunks cannot be judged here.
+                known = None
+            name = label if nb is None else f"{nb}:{label}"
+            if known is not None and label not in known:
                 # The chunk is gone from the notebook: nothing can reproduce its output.
-                c.removed_chunks.append(label)
+                c.removed_chunks.append(name)
                 c.add_hist_text("\n".join(lines), stamp)
                 continue
             current_chunks += 1
-            c.add_text("\n".join(lines), f"session.log:{label}")
+            c.add_text("\n".join(lines), f"session.log:{name}")
         # Runs without markers (a Positron run-all) cannot be split by chunk. The newest
-        # counts as current, attributed to the run rather than a chunk; older ones are
-        # history. A run that is the newest overall is always current, markers or not.
-        unmarked = [r for r in all_runs if not r.n_chunks]
-        for r in unmarked[:-1]:
-            c.n_old_runs += 1
-            c.add_hist_text(r.text, r.stamp)
-        if unmarked:
-            r = unmarked[-1]
+        # of each notebook counts as current, attributed to the run rather than a chunk;
+        # older ones are history. A run that is the newest overall is always current,
+        # markers or not.
+        unmarked: dict[str | None, list[sessionlog.Run]] = {}
+        for r in all_runs:
+            if not r.n_chunks:
+                unmarked.setdefault(r.notebook, []).append(r)
+        for nb, rs in unmarked.items():
+            for r in rs[:-1]:
+                c.n_old_runs += 1
+                c.add_hist_text(r.text, r.stamp)
+            r = rs[-1]
             c.unmarked_runs_used.append(r.stamp)
-            c.add_text(r.text, f"session.log:run {r.stamp} (no chunk markers)")
+            where = f"{nb}, " if nb is not None else ""
+            c.add_text(r.text, f"session.log:run {r.stamp} ({where}no chunk markers)")
         if all_runs:
             # First writer wins: the primary experiment's log is the one whose shape
             # explains this note's unmatched numbers. An --also experiment contributes
@@ -760,6 +799,23 @@ def _qmd_labels(fm: dict) -> set[str] | None:
     return {c.label for c in parse_chunks(qmd)}
 
 
+def _notebook_labels(fm: dict) -> dict[str, set[str]] | None:
+    """Chunk labels of every notebook beside the experiment's notebook, by file name.
+
+    The names are the ones claim_session() writes into a run header, so a run can be
+    checked against the notebook that wrote it. None if the notebook is unknown.
+    """
+    qmd = fm.get("analysis_qmd")
+    if not qmd:
+        return None
+    qmd = os.path.abspath(os.path.expanduser(str(qmd)))
+    if not os.path.isfile(qmd):
+        return None
+    from figtracer.figrun import parse_chunks
+    return {os.path.basename(p): {c.label for c in parse_chunks(p)}
+            for p in sorted(glob.glob(os.path.join(os.path.dirname(qmd), "*.qmd")))}
+
+
 def _extra_notes(fm: dict, extra: list[str] | None) -> list[str]:
     """Notes OUTSIDE the experiment folder that quote this experiment's numbers.
 
@@ -809,7 +865,8 @@ def diagnose(exp: str | None = None, also: list[str] | None = None,
         eid = str(fm.get("experiment_id") or exp or "?")
         outputs, log, note_dir = _paths(fm)
 
-    corpus = build_corpus(outputs, log, qmd_labels=_qmd_labels(fm) if fm else None)
+    corpus = build_corpus(outputs, log, qmd_labels=_qmd_labels(fm) if fm else None,
+                          notebook_labels=_notebook_labels(fm) if fm else None)
 
     # A note that legitimately quotes another experiment's numbers should SAY SO,
     # not have those numbers added to an ignore list. An ignore list makes a real
@@ -825,7 +882,8 @@ def diagnose(exp: str | None = None, also: list[str] | None = None,
         if oid in extra:
             continue
         oout, olog, _ = _paths(ofm)
-        build_corpus(oout, olog, corpus, qmd_labels=_qmd_labels(ofm))
+        build_corpus(oout, olog, corpus, qmd_labels=_qmd_labels(ofm),
+                     notebook_labels=_notebook_labels(ofm))
         extra.append(oid)
 
     findings, suppressed, documents = [], [], []
@@ -913,11 +971,13 @@ def where(exp: str | None, value: str, also: list[str] | None = None) -> dict:
     """
     fm = _experiment(exp)
     outputs, log, _ = _paths(fm)
-    corpus = build_corpus(outputs, log, qmd_labels=_qmd_labels(fm))
+    corpus = build_corpus(outputs, log, qmd_labels=_qmd_labels(fm),
+                          notebook_labels=_notebook_labels(fm))
     for other in also or []:
         ofm = _experiment(other)
         oout, olog, _ = _paths(ofm)
-        build_corpus(oout, olog, corpus, qmd_labels=_qmd_labels(ofm))
+        build_corpus(oout, olog, corpus, qmd_labels=_qmd_labels(ofm),
+                     notebook_labels=_notebook_labels(ofm))
     tok = normalise(value.strip())
     is_pct = tok.endswith("%")
     tok = tok.rstrip("%")

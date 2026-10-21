@@ -1190,6 +1190,14 @@ def test_list_names_the_defaults_a_configured_list_no_longer_guards(
         assert f"are not guarded: {', '.join(dropped)} (" in notice
 
 
+def _workers_exit_0(workers, cwd, env, slots):
+    """run_workers() with no R: every worker exits 0."""
+    for w in workers:
+        w.proc = SimpleNamespace(returncode=0)
+        w.started = w.ended = 0.0
+    return workers
+
+
 def test_a_run_names_the_unguarded_defaults_before_it_starts(tmp_path, monkeypatch, capsys,
                                                              restore_config):
     root, qmd = _write_qmd(tmp_path)
@@ -1197,7 +1205,7 @@ def test_a_run_names_the_unguarded_defaults_before_it_starts(tmp_path, monkeypat
     monkeypatch.setattr(figrun, "_exp", lambda args: ("EXP1", qmd, root))
     monkeypatch.setenv("FIGRUN_SCRATCH", str(tmp_path / "scratch"))
     monkeypatch.setattr(figrun, "runner_command", lambda *a, **kw: ["Rscript", "engine.R"])
-    monkeypatch.setattr(figrun.subprocess, "call", lambda cmd, cwd=None: 0)
+    monkeypatch.setattr(figrun.figrun_parallel, "run_workers", _workers_exit_0)
     args = _args(labels=["cell-counts"], list=False, dry_run=True, title=None, why=None)
     assert figrun.run(args) == 0
     captured = capsys.readouterr()

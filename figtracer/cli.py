@@ -9,6 +9,7 @@
   sync                   -> figtracer.sync       (the close-the-loop roundup)
   vault <sub>            -> figtracer.vault      (whole-vault health checks)
   notecheck              -> figtracer.notecheck  (numbers in notes exist in outputs)
+  slog                   -> figtracer.slog       (the CURRENT run of a session.log)
 
 It deliberately stays a dispatcher: each sub-tool owns its own argument parsing, so the
 machinery has one entry point without re-implementing anything. The old `labkit`/`figtools`
@@ -44,6 +45,8 @@ usage: figtracer <command> [args]
   figures <-> notes
     figsync       sync lab-note figures to the latest f2 render (index | drift | sync)
     figrun        render a qmd's figure chunks headlessly (--list | --changed | --awaiting)
+    slog          the CURRENT run of an append-only session.log (a chunk, --history, --runs,
+                  --errors, --notebook)
 
   decks and Word documents (provenanced like the note)
     deck <sub>    inspect | record | check — a deck built with figtracer.deck.DeckBuild
@@ -128,6 +131,10 @@ def main(argv=None) -> int:
     if cmd == "notecheck":
         from figtracer import notecheck
         return notecheck.main(rest)
+
+    if cmd == "slog":
+        from figtracer import slog
+        return slog.main(rest)
 
     if cmd == "export":
         from figtracer import export

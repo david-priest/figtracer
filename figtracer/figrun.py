@@ -33,6 +33,7 @@ are one lab's idioms and another lab's will differ:
       expensive_calls_extra: [saveRDS]     # added to the list in force
       expensive_calls: [prepData2, cluster2, mergeClusters, qs_save]   # REPLACES the defaults
       reload_calls: [qs_read, readRDS]
+      jobs: auto              # default --jobs (default 1); see figrun_parallel.py
 
 `expensive_calls_extra` adds names to the list in force and is the key to reach for.
 Setting `expensive_calls` replaces the default list (DEFAULT_EXPENSIVE_CALLS below);
@@ -58,6 +59,7 @@ import sys
 import time
 
 from labkit import config as lkconfig
+from figtracer import figrun_parallel
 from figtracer import manifest as _manifest
 from figtracer.sync import resolve
 
@@ -638,45 +640,128 @@ def run(args) -> int:
                 f"every merged-level figure.\n  Pass --allow-expensive if that is really "
                 f"what you want.")
 
-    plan, dropped_unnamed = build_plan(chunks, targets, args.labels or [], qmd, root,
-                                       dry_run=bool(args.dry_run),
-                                       explain=bool(args.explain))
-    if dropped_unnamed:
-        print(f"figrun: ignoring {dropped_unnamed} unlabelled chunk(s) — "
-              f"they cannot be addressed or depended on")
-
-    # One plan file per experiment, overwritten each run. The previous
-    # `<eid>_<epoch>.json` in /tmp left a ~250 KB file behind on every run and
+    # One plan file per experiment (per worker with --jobs), overwritten each run. The
+    # previous `<eid>_<epoch>.json` in /tmp left a ~250 KB file behind on every run and
     # nothing ever collected them. Kept outside the Drive tree, like rlog's own
     # state, because file COUNT is what breaks the Drive sync daemon.
     scratch = os.environ.get("FIGRUN_SCRATCH") or os.path.join(
         os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "figtracer")
     os.makedirs(scratch, exist_ok=True)
-    plan_path = os.path.join(scratch, f"figrun_{eid}.json")
-    with open(plan_path, "w", encoding="utf-8") as fh:
-        json.dump(plan, fh, indent=1)
+
+    # --jobs: the targets split across several R processes, as many as the memory and
+    # the cores allow (figrun_parallel). Every run records its peak memory and the
+    # seconds each target took; a parallel run is sized from those records.
+    records = figrun_parallel.Records(os.path.join(scratch, f"figrun_{eid}_resources.json"))
+    groups = [list(targets)]
+    jobs = _jobs(args, fc)
+    if jobs != 1 and len(targets) > 1:
+        per_worker = records.estimate(targets)
+        if per_worker is None:
+            print(f"figrun: no memory record for {eid} yet, so this run is made in one "
+                  f"process; it records one for --jobs")
+        else:
+            cores, load = figrun_parallel.cpu_state()
+            total, avail = figrun_parallel.memory()
+            requested = len(targets) if jobs == "auto" else jobs
+            n, limits = figrun_parallel.capacity(requested, len(targets), cores, load,
+                                                 total, avail, per_worker)
+            for limit in limits:
+                print(f"figrun: --jobs: {limit}")
+            groups = figrun_parallel.group_targets(targets, n, records.seconds)
 
     engine = os.path.join(os.path.dirname(__file__), "resources", "figrun.R")
     started = time.strftime("%Y-%m-%dT%H:%M:%S")
-
     title = args.title or f"{eid}: {', '.join(targets[:3])}" + \
         ("…" if len(targets) > 3 else "")
     why = args.why or (
         f"Re-render {len(targets)} figure chunk(s) in {eid} after a qmd edit, so the "
         f"renders land in {eid}/outputs with correct MANIFEST provenance.")
 
-    # One process for the whole chunk set: a launcher like rlog spawns a fresh
-    # Rscript each call and the checkpoint is 150 MB.
-    # rlog's own script form, not `-- Rscript ...`: argparse consumes the `--`
-    # separator before REMAINDER sees it, so `a.rest` ends up empty and `Rscript`
-    # lands in the `script` slot ("rlog: no such script: Rscript"). Passing the .R
-    # file directly is also better — rlog snapshots the code it ran.
-    cmd = runner_command(fc, engine, plan_path, eid, title, why, dry_run=bool(args.dry_run))
+    many = len(groups) > 1
+    workers = []
+    for k, group in enumerate(groups, 1):
+        plan, dropped_unnamed = build_plan(chunks, group,
+                                           [l for l in args.labels or [] if l in group],
+                                           qmd, root, dry_run=bool(args.dry_run),
+                                           explain=bool(args.explain))
+        if k == 1 and dropped_unnamed:
+            print(f"figrun: ignoring {dropped_unnamed} unlabelled chunk(s) — "
+                  f"they cannot be addressed or depended on")
+        stem = f"figrun_{eid}_w{k}" if many else f"figrun_{eid}"
+        if many:
+            # Each worker's seekit session log goes here, not to session.log (figrun.R).
+            plan["worker_log"] = os.path.join(scratch, stem + ".seekit.log")
+        plan["timings_path"] = os.path.join(scratch, stem + ".seconds.json")
+        plan_path = os.path.join(scratch, stem + ".json")
+        with open(plan_path, "w", encoding="utf-8") as fh:
+            json.dump(plan, fh, indent=1)
+        # One process per worker: a launcher like rlog spawns a fresh Rscript each
+        # call and the checkpoint is 150 MB.
+        # rlog's own script form, not `-- Rscript ...`: argparse consumes the `--`
+        # separator before REMAINDER sees it, so `a.rest` ends up empty and `Rscript`
+        # lands in the `script` slot ("rlog: no such script: Rscript"). Passing the .R
+        # file directly is also better — rlog snapshots the code it ran.
+        cmd = runner_command(fc, engine, plan_path, eid,
+                             f"{title} [worker {k}/{len(groups)}]" if many else title, why,
+                             dry_run=bool(args.dry_run))
+        workers.append(figrun_parallel.Worker(k, group, cmd, records.estimate(group),
+                                              os.path.join(scratch, stem + ".out"),
+                                              f"[{k}] " if many else "",
+                                              plan["timings_path"]))
 
-    print(f"figrun: {len(targets)} target chunk(s) in {eid}  (via {os.path.basename(cmd[0])})")
-    rc = subprocess.call(cmd, cwd=root)
-    if rc != 0:
-        print(f"\nfigrun: R exited {rc} — figures NOT verified", file=sys.stderr)
+    # rlog is a Python program: writing to figrun's pipe rather than a terminal, it
+    # would hold its output until it exits, and the run would show nothing until then.
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    if many:
+        # Threads per worker, so the workers' libraries do not oversubscribe the cores.
+        per = str(max(1, (os.cpu_count() or 1) // len(groups)))
+        for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+            env.setdefault(var, per)
+    session_log = os.path.join(root, "session.log")
+    manifest_path = os.path.join(root, "outputs", "MANIFEST.jsonl")
+    manifest_size = os.path.getsize(manifest_path) if os.path.exists(manifest_path) else 0
+
+    print(f"figrun: {len(targets)} target chunk(s) in {eid}  (via {os.path.basename(workers[0].cmd[0])})"
+          + (f", {len(groups)} workers" if many else ""))
+    if many:
+        for w in workers:
+            print(f"  worker {w.k}: {', '.join(w.targets)}")
+    done = figrun_parallel.run_workers(workers, root, env, slots=len(groups))
+    rcs = {w.k: w.proc.returncode for w in done}
+
+    if not args.dry_run:
+        # Records only from runs that finished: a run that died early peaked low.
+        ok = [w for w in done if rcs[w.k] == 0]
+        records.update({l: w.peak for w in ok for l in w.targets},
+                       {l: s for w in ok for l, s in w.seconds().items()})
+    if many and not args.dry_run:
+        for w in done:
+            print(f"  worker {w.k}: peak {w.peak / figrun_parallel.GIB:.1f} GB, "
+                  f"{(w.ended or time.time()) - w.started:.0f} s, exit {rcs[w.k]}")
+        # Read from each worker's own output, not from session.log changing during the
+        # run: another R session can append its run there meanwhile.
+        opened = [str(w.k) for w in done if w.opened_log]
+        if opened:
+            print(f"figrun: worker {', '.join(opened)} wrote session.log itself, so its "
+                  f"lines may be interleaved there; the loaded seekit does not keep its log "
+                  f"in the seekit.session_log_state option", file=sys.stderr)
+        if any(w.held_log for w in done):
+            with open(session_log, "a", encoding="utf-8") as fh:
+                fh.write(figrun_parallel.session_block(
+                    done, root, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(
+                        min(w.started for w in done)))))
+            print(f"figrun: the {len(done)} workers' output is in session.log as one run")
+        bad = figrun_parallel.unparsed_manifest_lines(manifest_path, manifest_size)
+        if bad:
+            print(f"figrun: {bad} line(s) the workers appended to MANIFEST.jsonl do not "
+                  f"parse — figures NOT verified", file=sys.stderr)
+            return 1
+
+    failed = [k for k, rc in rcs.items() if rc != 0]
+    if failed:
+        rc = rcs[failed[0]]
+        where = f" (worker {', '.join(map(str, failed))})" if many else ""
+        print(f"\nfigrun: R exited {rc}{where} — figures NOT verified", file=sys.stderr)
         return rc
     if args.dry_run:
         return 0
@@ -686,6 +771,23 @@ def run(args) -> int:
     if status:
         return status
     return finish_typography(root, targets, started)
+
+
+def _jobs(args, fc: dict):
+    """Worker count from --jobs, else `figrun: {jobs: ...}` in config.yaml, else 1:
+    a number, or "auto" for as many as the targets, the memory and the cores (less one) allow."""
+    v = getattr(args, "jobs", None)
+    if v is None:
+        v = fc.get("jobs", 1)
+    if str(v).strip().lower() == "auto":
+        return "auto"
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        n = 0
+    if n < 1:
+        raise SystemExit(f"figrun: --jobs takes a whole number from 1, or auto (got {v!r})")
+    return n
 
 
 def finish_typography(root, targets, started) -> int:
@@ -1129,6 +1231,9 @@ def main(argv=None) -> int:
     p.add_argument("--explain", action="store_true",
                    help="under each prerequisite in the plan, name the symbols it writes "
                         "and the chunks that read them")
+    p.add_argument("--jobs", help="run the targets in up to N R processes at once, or "
+                                 "'auto'; each starts only when memory and a core are free "
+                                 "(default: figrun.jobs in config.yaml, else 1)")
     p.add_argument("--title", help="rlog run title")
     p.add_argument("--why", help="rlog --why: why this is being run")
     args = p.parse_args(argv)
