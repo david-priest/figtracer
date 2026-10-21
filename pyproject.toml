@@ -11,7 +11,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 # Union of the three former packages' deps so the whole toolchain installs from one wheel.
-dependencies = ["PyYAML>=6", "openpyxl>=3", "lxml>=5", "Pillow>=10"]
+dependencies = ["PyYAML>=6", "openpyxl>=3", "lxml>=5", "Pillow>=10", "pypdf>=5"]
 
 [project.urls]
 Homepage = "https://github.com/david-priest/figtracer"

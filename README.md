@@ -63,6 +63,8 @@ The figure loop is one function call in an analysis you already have. `figrun` a
 
 ## The figure loop
 
+R exports use a shared Arial policy through the bundled `saveFig()` and current seekit save helpers. PDF saves embed real regular, bold, italic and bold-italic Arial faces and keep text editable. Literal name hyphens are repaired at the PDF encoding boundary; genuine numeric negatives retain their minus signs. SVG/PNG saves render with Arial. This needs Ghostscript, fontconfig and all four Arial faces; missing fonts stop the export instead of silently substituting another face. `figrun` also checks PDFs from older writers, normalizes SVG fonts, and refuses an older PNG writer whose font policy cannot be verified after rasterisation. `figtracer fig typography generated.pdf` applies the PDF check to an existing generated file.
+
 This is the part to try first. It works in an existing analysis with any directory layout, in R
 or Python, with notes in any Markdown editor, and needs nothing else from figtracer.
 

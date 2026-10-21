@@ -10,8 +10,8 @@
 #   p <- ggplot(df, aes(x, y)) + geom_point()
 #   saveFig(p, title = "umap_level1", embed = TRUE)   # -> outputs/<date>_<nb>/…svg + MANIFEST line
 #
-# Depends only on base R. ggplot2 is used if the plot is a ggplot; knitr/git are used
-# for provenance when available (all optional, degrade to NA).
+# The shared exporter is provided by the installed figtracer CLI. PDF requires
+# Ghostscript/fontconfig and Arial; SVG/PNG use svglite/ragg. knitr/git provenance is optional.
 # ---------------------------------------------------------------------------------
 
 # flat named list -> one JSON object line (no jsonlite dependency)
@@ -43,14 +43,13 @@
   error = function(e) NA_character_))
 
 .sb_render <- function(p, path, w, h, format) {
-  if (inherits(p, "ggplot") && requireNamespace("ggplot2", quietly = TRUE)) {
-    ggplot2::ggsave(path, p, width = w, height = h, units = "in")
-  } else {
-    dev <- switch(format, svg = grDevices::svg, pdf = grDevices::pdf, png = grDevices::png)
-    if (format == "png") dev(path, width = w * 100, height = h * 100) else dev(path, width = w, height = h)
-    on.exit(grDevices::dev.off())
-    if (is.function(p)) p() else print(p)      # ggplot handled above; base plots via a function/expr
-  }
+  cli <- Sys.which("figtracer")
+  if (!nzchar(cli)) stop("Figure export requires figtracer on PATH for Arial and hyphen validation.")
+  support <- system2(cli, c("fig", "typography", "--r-helper"), stdout = TRUE)
+  if (length(support) != 1L || !file.exists(support)) stop("Update figtracer to use its typography exporter.")
+  renderer <- new.env(parent = baseenv())
+  sys.source(support, envir = renderer)
+  renderer$.figtracer_render(p, path, w, h, format, cli = cli)
 }
 
 #' Save a figure and log its provenance for the figtracer pipeline.
@@ -87,6 +86,8 @@ saveFig <- function(p, title = NULL, w = 7, h = 5, format = c("svg", "pdf", "png
     channel     = channel,
     embed       = isTRUE(embed),
     fig_format  = format,
+    font_family = "Arial",
+    typography_policy = "arial-hyphen-v1",
     width_in    = w,
     height_in   = h,
     timestamp   = ts,

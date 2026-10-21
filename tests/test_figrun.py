@@ -18,6 +18,30 @@ import pytest
 from figtracer import figrun
 
 
+def test_typography_only_finishes_this_runs_pdf(tmp_path, monkeypatch):
+    from figtools import typography
+    out = tmp_path / "outputs"
+    out.mkdir()
+    rows = [
+        {"title": "counts", "fig": "counts.pdf", "saved_at": "2026-01-01T00:00:02", "chunk_label": "figure"},
+        {"title": "other", "fig": "other.pdf", "saved_at": "2026-01-01T00:00:02", "chunk_label": "interactive"},
+        {"title": "old", "fig": "old.pdf", "saved_at": "2025-01-01T00:00:02", "chunk_label": "figure"},
+    ]
+    (out / "MANIFEST.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+    finished = []
+    monkeypatch.setattr(typography, "finish_pdf", lambda path: finished.append(path) or {"font": "Arial"})
+    assert figrun.finish_typography(str(tmp_path), ["figure"], "2026-01-01T00:00:01") == 0
+    assert finished == [str(out / "counts.pdf")]
+
+
+def test_typography_rejects_outside_path(tmp_path, monkeypatch):
+    out = tmp_path / "outputs"
+    out.mkdir()
+    (out / "MANIFEST.jsonl").write_text(json.dumps({
+        "title": "outside", "fig": "../outside.pdf", "saved_at": "2026-01-01T00:00:02", "chunk_label": "figure"}))
+    assert figrun.finish_typography(str(tmp_path), ["figure"], "2026-01-01T00:00:01") == 1
+
+
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 QMD = '''---
@@ -105,7 +129,7 @@ def _entry(root, title, saved_at, chunk_label=None, size=20000, qmd_path=None):
 
 def _args(**kw):
     base = dict(labels=[], exp="EXP", awaiting=False, changed=False,
-                allow_expensive=False, dry_run=False)
+                allow_expensive=False, dry_run=False, explain=False)
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -524,7 +548,7 @@ def test_plan_shape_and_payload_rules(tmp_path):
     chunks = figrun.parse_chunks(qmd)
     plan, dropped = figrun.build_plan(chunks, ["cell-counts"], [], qmd, root, dry_run=True)
     assert set(plan) == {"qmd", "qmd_rel", "exp_root", "targets", "skip", "bootstrap",
-                         "provided", "assume", "plan_only", "chunks"}
+                         "provided", "assume", "plan_only", "explain", "chunks"}
     assert plan["qmd_rel"] == os.path.join("analysis", "EXP.qmd")
     assert plan["plan_only"] is True
     labels = [c["label"] for c in plan["chunks"]]
