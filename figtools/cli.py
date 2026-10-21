@@ -70,6 +70,10 @@ def build_parser() -> argparse.ArgumentParser:
     pz.add_argument("-o", "--out", help="output PNG (default <pdf stem>.<dpi>dpi.png alongside)")
     pz.add_argument("--dpi", type=int, default=300)
 
+    pt = sub.add_parser("typography", help="finish an R PDF with embedded Arial and short name hyphens")
+    pt.add_argument("pdf", nargs="?")
+    pt.add_argument("--r-helper", action="store_true", help="print the bundled R exporter path")
+
     po = sub.add_parser("optimise",
                         help="shrink a figure PDF/.ai by downsampling embedded rasters (vector preserved)")
     po.add_argument("input", help="a .pdf / PDF-compatible .ai, or a directory of them")
@@ -151,6 +155,9 @@ def main(argv=None) -> int:
     if args.cmd == "optimise":
         from . import optimise
         return optimise.run(args)
+    if args.cmd == "typography":
+        from . import typography
+        return typography.run(args)
     if args.cmd == "verify":
         from . import verify
         return verify.run(args)

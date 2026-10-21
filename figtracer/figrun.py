@@ -639,7 +639,8 @@ def run(args) -> int:
                 f"what you want.")
 
     plan, dropped_unnamed = build_plan(chunks, targets, args.labels or [], qmd, root,
-                                       dry_run=bool(args.dry_run))
+                                       dry_run=bool(args.dry_run),
+                                       explain=bool(args.explain))
     if dropped_unnamed:
         print(f"figrun: ignoring {dropped_unnamed} unlabelled chunk(s) — "
               f"they cannot be addressed or depended on")
@@ -680,11 +681,53 @@ def run(args) -> int:
     if args.dry_run:
         return 0
 
-    return verify(root, chunks, targets, started)
+    # Verify scope/provenance before touching files: never claim another R session's render.
+    status = verify(root, chunks, targets, started)
+    if status:
+        return status
+    return finish_typography(root, targets, started)
+
+
+def finish_typography(root, targets, started) -> int:
+    """Older notebooks/writers get the same PDF guard as the interactive R exporter."""
+    from figtools.typography import finish_pdf, finish_svg
+    outputs = os.path.realpath(os.path.join(root, "outputs"))
+    seen = set()
+    for entry in _manifest_entries(root):
+        if ((entry.get("saved_at") or "") < started
+                or entry.get("chunk_label") not in targets
+                or _manifest.kind(entry) == _manifest.TABLE):
+            continue
+        rel = entry.get("rel_path") or entry.get("fig") or ""
+        ext = os.path.splitext(rel)[1].lower()
+        if ext not in (".pdf", ".svg", ".png"):
+            continue
+        path = os.path.realpath(os.path.join(outputs, rel))
+        if os.path.commonpath([outputs, path]) != outputs:
+            print("figrun: typography refused a path outside this outputs tree", file=sys.stderr)
+            return 1
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            if ext == ".pdf":
+                report = finish_pdf(path)
+            elif ext == ".svg":
+                report = finish_svg(path)
+            else:
+                if entry.get("typography_policy") != "arial-hyphen-v1":
+                    raise RuntimeError("PNG font cannot be verified after rasterisation; update the R save helper and rerender")
+                report = {"font": "Arial"}
+        except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+            print(f"figrun: typography check failed: {error}", file=sys.stderr)
+            return 1
+        print(f"  typography: {report['font']}; name hyphens checked — {os.path.basename(path)}")
+    return 0
 
 
 def build_plan(chunks: list[Chunk], targets: list[str], named: list[str],
-               qmd: str, root: str, dry_run: bool = False) -> tuple[dict, int]:
+               qmd: str, root: str, dry_run: bool = False,
+               explain: bool = False) -> tuple[dict, int]:
     """The JSON the R engine consumes. Pure, so the two guards below can be pinned
     by tests. `named` is the chunk labels the caller asked for BY NAME (empty for
     --changed / --awaiting). Returns (plan, number of unlabelled chunks dropped)."""
@@ -746,6 +789,7 @@ def build_plan(chunks: list[Chunk], targets: list[str], named: list[str],
         "provided": [],
         "assume": [],
         "plan_only": bool(dry_run),
+        "explain": bool(explain),
         "chunks": payload_chunks,
     }
     return plan, dropped_unnamed
@@ -1082,6 +1126,9 @@ def main(argv=None) -> int:
                    help="permit chunks that recluster or rebuild the object")
     p.add_argument("--dry-run", action="store_true",
                    help="print the resolved chunk plan and stop (no renders)")
+    p.add_argument("--explain", action="store_true",
+                   help="under each prerequisite in the plan, name the symbols it writes "
+                        "and the chunks that read them")
     p.add_argument("--title", help="rlog run title")
     p.add_argument("--why", help="rlog --why: why this is being run")
     args = p.parse_args(argv)
