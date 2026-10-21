@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -430,3 +431,146 @@ def test_a_read_inside_a_function_is_served_by_a_later_chunk(r_engine, tmp_path)
     root, chunks, started, proc = _run(tmp_path / "run", qmd, ["fig-donors"])
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert figrun.verify(root, chunks, ["fig-donors"], started) == 0
+
+
+# --jobs: two workers on one notebook. The setup chunk opens a session log the way
+# seekit's start_session_log() does, keeping its state in the
+# `seekit.session_log_state` option and declining a second log at another path. Each
+# worker's log is held in a file of its own, and figrun appends both workers' output
+# to session.log as one run.
+FAKE_SESSION_LOG = _chunk("setup-log", "\n".join([
+    "library(stats)",
+    'start_session_log <- function(path = "session.log") {',
+    '  st <- getOption("seekit.session_log_state")',
+    "  if (is.environment(st) && !is.null(st$con) && !identical(st$path, path)) {",
+    '    message("Session log already open at: ", st$path, ". Call stop_session_log() first.")',
+    "    return(invisible(st$path))",
+    "  }",
+    '  cat("\\n\\n# ── Session log ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), " ── #\\n",',
+    '      file = path, append = TRUE, sep = "")',
+    '  sink(file(path, open = "at"), split = TRUE)',
+    "}",
+    'start_session_log("session.log")',
+]))
+
+
+def test_two_workers_render_their_targets_and_log_one_run(r_engine, tmp_path, monkeypatch, capsys):
+    from figtracer import figrun_parallel, sessionlog
+    root = tmp_path / "EXP"
+    (root / "analysis").mkdir(parents=True)
+    qmd = root / "analysis" / "EXP.qmd"
+    qmd.write_text(_notebook(
+        WRITER, FAKE_SESSION_LOG, VALUES,
+        _chunk("fig-one", _plot("values", "batch") + '\nprint("one drawn")\nf2(p, title = "synthetic_one")'),
+        _chunk("fig-two", _plot("rev(values)", "batch") + '\nprint("two drawn")\nf2(p, title = "synthetic_two")'),
+    ), encoding="utf-8")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    # A record from an earlier run, without which the run is made in one process.
+    (scratch / "figrun_EXP_resources.json").write_text(json.dumps(
+        {"peak_bytes": {"fig-one": 200 * 2 ** 20, "fig-two": 200 * 2 ** 20}, "seconds": {}}))
+    monkeypatch.setenv("FIGRUN_SCRATCH", str(scratch))
+    monkeypatch.setattr(figrun, "figrun_config", lambda: {"runner": "Rscript"})
+    monkeypatch.setattr(figrun, "_exp", lambda args: ("EXP", str(qmd), str(root)))
+    monkeypatch.setattr(figrun, "finish_typography", lambda *a: 0)
+    monkeypatch.setattr(figrun_parallel, "cpu_state", lambda: (8, 0.0))
+    monkeypatch.setattr(figrun_parallel, "memory", lambda: (64 * 2 ** 30, 32 * 2 ** 30))
+    args = SimpleNamespace(labels=["fig-one", "fig-two"], exp="EXP", awaiting=False,
+                           changed=False, allow_expensive=False, dry_run=False, explain=False,
+                           list=False, title=None, why=None, jobs="2")
+    assert figrun.run(args) == 0, capsys.readouterr()
+    out = capsys.readouterr().out
+    assert "2 workers" in out and "[1] " in out and "[2] " in out, out
+    runs = sessionlog.runs(str(root / "session.log"))
+    assert len(runs) == 1, runs
+    assert {"fig-one", "fig-two"} <= set(runs[0].chunk_labels), runs[0].text
+    assert "one drawn" in runs[0].text and "two drawn" in runs[0].text
+    records = json.loads((scratch / "figrun_EXP_resources.json").read_text())
+    assert set(records["seconds"]) == {"fig-one", "fig-two"}
+    assert records["peak_bytes"]["fig-one"] > 0 and records["peak_bytes"]["fig-one"] != 200 * 2 ** 20
+
+# source() puts a script's functions into globalenv without an assignment in the chunk.
+# A chunk calling one of them read a symbol no chunk wrote, so the chunk that sourced
+# the script was left out of the plan; notebooks sourced their helpers again in every
+# chunk instead. The script's top-level assignments now count as the chunk's writes.
+HELPERS = "scale_values <- function(x) unlist(x) / max(unlist(x))\nHELPER_BATCH <- \"B1\"\n"
+
+SOURCE_CALLS = {
+    "file.path": 'source(file.path(ROOT, "scripts", "helpers.R"))',
+    "here": 'source(here::here("scripts", "helpers.R"))',
+    "literal": 'source("scripts/helpers.R")',
+    "paste0": 'source(paste0(ROOT, "/scripts/helpers.R"))',
+    "loop": 'for (f in c("helpers.R")) source(file.path(ROOT, "scripts", f))',
+    "suppressed": 'suppressMessages(source(file.path(ROOT, "scripts", "helpers.R"), local = TRUE))',
+}
+
+
+def _with_helpers(tmp_path, text=HELPERS):
+    scripts = tmp_path / "EXP" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "helpers.R").write_text(text, encoding="utf-8")
+
+
+def _source_notebook(call, target_sources=False):
+    fig = _plot("scale_values(values)", "HELPER_BATCH") + '\nf2(p, title = "synthetic_scaled")'
+    if target_sources:
+        fig = call + "\n" + fig
+    return _notebook(
+        WRITER,
+        _chunk("constants", 'ROOT <- "."'),
+        _chunk("helpers", call),
+        VALUES,
+        _chunk("unrelated", "other <- 1"),
+        _chunk("fig-scaled", fig),
+    )
+
+
+@pytest.mark.parametrize("call", list(SOURCE_CALLS), ids=list(SOURCE_CALLS))
+def test_a_function_from_a_sourced_script_pulls_in_the_sourcing_chunk(r_engine, tmp_path, call):
+    _with_helpers(tmp_path)
+    labels, out = _plan(tmp_path, _source_notebook(SOURCE_CALLS[call]), ["fig-scaled"])
+    uses_root = "ROOT" in SOURCE_CALLS[call]
+    assert labels == ["setup-writer"] + (["constants"] if uses_root else []) + \
+        ["helpers", "load-values", "* fig-scaled"], out
+    assert "scale_values" not in out and "HELPER_BATCH" not in out, out
+
+
+def test_the_sourced_function_is_defined_when_the_target_runs(r_engine, tmp_path):
+    _with_helpers(tmp_path / "run")
+    root, chunks, started, proc = _run(tmp_path / "run", _source_notebook(SOURCE_CALLS["file.path"]),
+                                       ["fig-scaled"])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert figrun.verify(root, chunks, ["fig-scaled"], started) == 0
+
+
+# A target that sources the script itself defines the function before calling it, so
+# the earlier sourcing chunk is not needed.
+def test_a_target_that_sources_its_own_helpers_needs_no_other_sourcing_chunk(r_engine, tmp_path):
+    _with_helpers(tmp_path)
+    call = SOURCE_CALLS["file.path"]
+    labels, out = _plan(tmp_path, _source_notebook(call, target_sources=True), ["fig-scaled"])
+    assert labels == ["setup-writer", "constants", "load-values", "* fig-scaled"], out
+
+
+# A script that sources another defines what both assign.
+def test_a_script_sourced_by_a_sourced_script_is_followed(r_engine, tmp_path):
+    _with_helpers(tmp_path, 'source(file.path("scripts", "inner.R"))\n')
+    (tmp_path / "EXP" / "scripts" / "inner.R").write_text(HELPERS, encoding="utf-8")
+    labels, out = _plan(tmp_path, _source_notebook(SOURCE_CALLS["literal"]), ["fig-scaled"])
+    assert labels == ["setup-writer", "helpers", "load-values", "* fig-scaled"], out
+
+
+# Definitions sourced into another environment are not visible to the notebook, and a
+# file that cannot be found defines nothing figrun knows of; the call is then named
+# beside the unresolved symbols.
+@pytest.mark.parametrize("call,named", [
+    ('source(file.path(ROOT, "scripts", "helpers.R"), local = new.env())', False),
+    ('source(file.path(ROOT, "scripts", sprintf("%s.R", "helpers")))', True),
+], ids=["other-environment", "unresolvable-path"])
+def test_a_source_figrun_cannot_place_defines_nothing(r_engine, tmp_path, call, named):
+    _with_helpers(tmp_path)
+    labels, out = _plan(tmp_path, _source_notebook(call), ["fig-scaled"])
+    assert "helpers" not in labels, out
+    report = [line for line in out.splitlines() if "not found on the search path" in line]
+    assert len(report) == 1 and "scale_values" in report[0], out
+    assert ("source() calls whose file figrun could not find" in out) is named, out

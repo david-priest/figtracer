@@ -161,6 +161,88 @@ local(envir = new.env(parent = parent.env(globalenv())), {
   SEQUENTIAL <- c("{", "(", "suppressMessages", "suppressWarnings",
                   "suppressPackageStartupMessages", "invisible")
 
+  # SOURCE() DEFINES WHAT ITS FILE ASSIGNS.
+  # A chunk that runs `source(file.path(EXP_ROOT, "scripts", "helpers.R"))` puts every
+  # function the script defines into globalenv, but no assignment in the chunk says so.
+  # A later chunk that called one of them read a symbol no chunk wrote: the sourcing
+  # chunk was never pulled in, and the call was listed as "not written by any chunk".
+  # Notebooks worked around it by sourcing their helper scripts again in every chunk.
+  # Here the file is found from the string literals in the call (`file.path(ROOT,
+  # "scripts", "x.R")`, `here::here("scripts", "x.R")`, a literal path, or a name the
+  # chunk bound to literals, as a loop over file names does), joined with "/" and looked
+  # up under the experiment root and the notebook's folder; an absolute or `~` path is
+  # taken as it is. The script is parsed, not run, and its top-level assignments count
+  # as the chunk's writes. A script it sources in turn is followed, three levels deep.
+  # A call whose file cannot be found is recorded and named when a symbol is left
+  # unresolved, because what it defines is then unknown.
+  SOURCE_DIRS <- unique(c(PLAN$exp_root, dirname(PLAN$qmd)))
+  file_cache <- new.env(parent = emptyenv())
+  path_options <- function(x, binds) {
+    if (is.character(x)) return(if (length(x) == 1 && !is.na(x)) x else character(0))
+    if (is.name(x)) {
+      s <- as.character(x)
+      return(if (nzchar(s) && s %in% names(binds)) binds[[s]] else character(0))
+    }
+    if (!is.call(x)) return(character(0))
+    out <- character(0)
+    for (k in args_from(x, 2)) {
+      opt <- path_options(x[[k]], binds)
+      if (!length(opt)) next
+      out <- if (length(out)) as.vector(outer(out, opt, paste, sep = "/")) else opt
+    }
+    out
+  }
+  find_file <- function(rel, dirs) {
+    rel <- gsub("/+", "/", rel)
+    cand <- c(if (grepl("^(~|/)", rel)) path.expand(rel), file.path(dirs, sub("^/", "", rel)))
+    hit <- cand[file.exists(cand) & !dir.exists(cand)]
+    if (length(hit)) normalizePath(hit[[1]]) else NA_character_
+  }
+  globalenv_target <- function(x)
+    identical(x, quote(globalenv())) || identical(x, as.name(".GlobalEnv")) ||
+      identical(x, quote(.GlobalEnv))
+  # The names a source()/sys.source() call defines in globalenv; NULL when its file
+  # cannot be found. A source() into another environment (`local = new.env()`) or a
+  # sys.source() into anything but globalenv defines nothing the notebook can see.
+  sourced_names <- function(e, binds, dirs = SOURCE_DIRS, depth = 0L) {
+    h <- fname(e)
+    m <- tryCatch(match.call(get(h, envir = baseenv()), e), error = function(z) NULL)
+    if (is.null(m) || is.null(m$file)) return(NULL)
+    if (h == "source") {
+      loc <- m$local
+      if (!is.null(loc) && !isTRUE(loc) && !isFALSE(loc) && !globalenv_target(loc))
+        return(character(0))
+    } else if (is.null(m$envir) || !globalenv_target(m$envir)) {
+      return(character(0))
+    }
+    files <- unique(stats::na.omit(vapply(path_options(m$file, binds), find_file,
+                                          character(1), dirs = dirs)))
+    if (!length(files)) return(NULL)
+    unique(unlist(lapply(files, file_names, depth = depth)))
+  }
+  file_names <- function(path, depth) {
+    if (!is.null(file_cache[[path]])) return(file_cache[[path]])
+    file_cache[[path]] <- character(0)   # a script that sources itself stops here
+    ex <- tryCatch(parse(file = path, keep.source = FALSE), error = function(z) NULL)
+    out <- character(0)
+    top <- function(e) {
+      if (!is.call(e)) return(invisible(NULL))
+      h <- fname(e)
+      if (h %in% c("<-", "<<-", "=") && length(e) == 3 && is.name(e[[2]]))
+        out <<- c(out, as.character(e[[2]]))
+      else if (h == "assign" && length(e) >= 2 && is.character(e[[2]]) && writes_here(e))
+        out <<- c(out, e[[2]])
+      else if (h %in% c("source", "sys.source") && depth < 3L)
+        out <<- c(out, sourced_names(e, list(), unique(c(dirname(path), SOURCE_DIRS)),
+                                     depth + 1L))
+      else if (h %in% c(SEQUENTIAL, "if"))
+        for (k in args_from(e, 2)) top(e[[k]])
+      invisible(NULL)
+    }
+    for (e in as.list(ex)) top(e)
+    file_cache[[path]] <- unique(out)
+  }
+
   info <- lapply(chunks, function(ch) {
     expr <- tryCatch(parse(text = ch$body, keep.source = FALSE), error = function(e) NULL)
     if (is.null(expr))
@@ -211,6 +293,7 @@ local(envir = new.env(parent = parent.env(globalenv())), {
     w <- character(0)
     rd <- character(0)
     dyn <- character(0)
+    unsourced <- character(0)
     walk <- function(e, st, reads = TRUE) {
       if (is.name(e)) {
         s <- as.character(e)
@@ -281,6 +364,17 @@ local(envir = new.env(parent = parent.env(globalenv())), {
         }
         return(st)
       }
+      if (h %in% c("source", "sys.source")) {
+        if (reads) rd <<- c(rd, setdiff(free_symbols(e), st$defined))
+        nm <- sourced_names(e, st$binds)
+        if (is.null(nm)) {
+          unsourced <<- c(unsourced, paste(deparse(e, width.cutoff = 200L), collapse = " "))
+        } else {
+          w <<- c(w, nm)
+          st$defined <- union(st$defined, nm)
+        }
+        return(st)
+      }
       # Any other call: findGlobals reports what it reads. Assignments inside it
       # (`system.time(x <- ...)`, `tryCatch({...})`) still count as writes, and a
       # mutation inside it still reads its object, but none is certain to have run.
@@ -295,7 +389,7 @@ local(envir = new.env(parent = parent.env(globalenv())), {
     # `now`: the reads made when the chunk runs. The rest are made inside a function
     # body or a DATA_MASKED call, which can run in a later chunk.
     list(label = ch$label, ok = TRUE, reads = reads, now = intersect(reads, c(rd, dyn)),
-         writes = w)
+         writes = w, unsourced = unique(unsourced))
   })
   names(info) <- vapply(chunks, function(ch) ch$label, character(1))
 
@@ -430,10 +524,17 @@ local(envir = new.env(parent = parent.env(globalenv())), {
   unresolved <- setdiff(need$sym, c(provided, unlist(PLAN$assume), written, boot_reads))
   unresolved <- unresolved[!vapply(unresolved, function(s)
     exists(s, envir = globalenv(), inherits = TRUE), logical(1))]
-  if (length(unresolved))
+  if (length(unresolved)) {
     say("  ! not written by any chunk in the plan, and not found on the search path: ",
         paste(head(unresolved, 25), collapse = ", "),
         "\n    (fine if the loaded object or a package supplies them; a typo otherwise)")
+    # A source() whose file was not found may be what defines them.
+    uns <- unlist(lapply(lab_of[seq_len(hi)], function(l)
+      if (length(info[[l]]$unsourced)) paste0(l, ": ", info[[l]]$unsourced)))
+    if (length(uns))
+      say("    source() calls whose file figrun could not find, so what they define is ",
+          "unknown: ", paste(head(uns, 5), collapse = "; "))
+  }
 
   if (isTRUE(PLAN$plan_only)) quit(save = "no", status = 0)
 
@@ -448,6 +549,21 @@ local(envir = new.env(parent = parent.env(globalenv())), {
   # derived from the plan rather than typed.
   if (requireNamespace("here", quietly = TRUE) && !is.null(PLAN$qmd_rel))
     suppressMessages(here::i_am(PLAN$qmd_rel))
+
+  # A WORKER OF A PARALLEL RUN (--jobs) KEEPS OFF session.log. Several workers
+  # appending to it would interleave their output, and slog could no longer find a
+  # run. seekit's start_session_log() keeps its open log in the
+  # `seekit.session_log_state` option and declines to open a second one at another
+  # path, so a log opened here first, in a file of the worker's own, is where the
+  # notebook's call leaves it. figrun appends the workers' output to session.log as
+  # one run when all have finished.
+  if (!is.null(PLAN$worker_log)) {
+    st <- new.env(parent = emptyenv())
+    st$con <- file(PLAN$worker_log, open = "at")
+    st$path <- PLAN$worker_log
+    st$handlers <- TRUE
+    options(seekit.session_log_state = st)
+  }
 
   # Bare `p` at the end of a figure chunk auto-prints. Under Rscript there is no
   # graphics device, so R opens the default one and litters Rplots.pdf in the
@@ -531,6 +647,7 @@ local(envir = new.env(parent = parent.env(globalenv())), {
   }
 
   first_target <- TRUE
+  timings <- list()
   for (ch in chunks) {
     if (!(ch$label %in% plan_labels)) next
     arm_shadow()
@@ -569,6 +686,7 @@ local(envir = new.env(parent = parent.env(globalenv())), {
       running_target <- ch$label
       before <- writers()
     }
+    t0 <- proc.time()[["elapsed"]]
     ev <- withVisible(eval(parse(text = ch$body), envir = globalenv()))
     if (ch$label %in% targets && ev$visible && !is.null(ev$value)) {
       # A figure chunk normally ends in a bare `p`, which auto-prints interactively
@@ -576,6 +694,11 @@ local(envir = new.env(parent = parent.env(globalenv())), {
       # bare object renders nothing.
       if (inherits(ev$value, c("ggplot", "patchwork", "Heatmap", "HeatmapList", "gg")))
         print(ev$value)
+    }
+    # Seconds per chunk, written after each one, for figrun --jobs to balance its workers.
+    if (!is.null(PLAN$timings_path)) {
+      timings[[ch$label]] <- round(proc.time()[["elapsed"]] - t0, 1)
+      try(jsonlite::write_json(timings, PLAN$timings_path, auto_unbox = TRUE), silent = TRUE)
     }
     if (is_target) {
       running_target <- NULL

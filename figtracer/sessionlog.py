@@ -33,6 +33,12 @@ from dataclasses import dataclass, field
 # markers, so a block legitimately has zero chunks.
 RUN_HEADER = re.compile(r"^# ── Session log (.+?) ── #")
 CHUNK_HEADER = re.compile(r"^── \[([^\]]+)\]")
+# Written into the header by seekit's start_session_log() when claim_session() has
+# claimed the R session (seekit-dev #53). Several notebooks in one experiment append to
+# one session.log, so without it a run cannot be told apart from another notebook's.
+NOTEBOOK_LINE = re.compile(r"^# notebook:\s*(.+?)\s*$")
+# The header is the run-header line and the `# key: value` lines straight after it.
+_HEADER_SCAN = 12
 
 
 @dataclass
@@ -41,6 +47,17 @@ class Run:
 
     stamp: str
     lines: list[str] = field(default_factory=list)
+
+    @property
+    def notebook(self) -> str | None:
+        """The notebook the header names, or None for a run written without one."""
+        for ln in self.lines[1:_HEADER_SCAN]:
+            if not ln.startswith("# "):
+                break
+            m = NOTEBOOK_LINE.match(ln)
+            if m:
+                return m.group(1)
+        return None
 
     @property
     def n_chunks(self) -> int:
