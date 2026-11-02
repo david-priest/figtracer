@@ -1,6 +1,6 @@
 [project]
 name = "figtracer"
-version = "0.5.0"
+version = "0.5.1"
 description = "Keep the figures and tables in Markdown lab notes in step with the R or Python notebook chunks that made them: a manifest records each save with its notebook and chunk, figrun re-runs labelled chunks headlessly, and notecheck checks the numbers in a note against the saved outputs."
 requires-python = ">=3.11"
 license = "MIT"
