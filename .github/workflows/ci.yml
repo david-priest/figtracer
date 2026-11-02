@@ -11,14 +11,16 @@ permissions:
 #                      and re-add it to run again), or set the repository variable
 #                      AUTOMATIC_HOSTED_CI to true to run every non-draft revision
 #   workflow_dispatch  the full matrix, Python 3.11 to 3.14, and the smoke test
-# A change that touches only Markdown or docs/ runs nothing.
+# A push to main that touches only Markdown or docs/ runs nothing.
+# The public mirror (dev/publish.sh copies this file) costs nothing to run, and its
+# main requires every check, so a public repository runs the full matrix and the
+# smoke test on every push to main and every pull request.
 on:
   push:
     branches: [main]
     paths-ignore: ['**.md', 'docs/**']
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
-    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
 # Superseded revisions must not keep spending the shared Actions allowance.
@@ -29,6 +31,7 @@ concurrency:
 jobs:
   test:
     if: >-
+      !github.event.repository.private ||
       github.event_name != 'pull_request' ||
       (github.event.action == 'labeled' && github.event.label.name == 'run-hosted-ci') ||
       (github.event.action != 'labeled' && vars.AUTOMATIC_HOSTED_CI == 'true' && !github.event.pull_request.draft)
@@ -37,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["3.11", "3.12", "3.13", "3.14"]' || '["3.12"]') }}
+        python-version: ${{ fromJSON((github.event_name == 'workflow_dispatch' || !github.event.repository.private) && '["3.11", "3.12", "3.13", "3.14"]' || '["3.12"]') }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python ${{ matrix.python-version }}
@@ -52,6 +55,7 @@ jobs:
   package:
     name: Clean wheel smoke
     if: >-
+      !github.event.repository.private ||
       github.event_name != 'pull_request' ||
       (github.event.action == 'labeled' && github.event.label.name == 'run-hosted-ci') ||
       (github.event.action != 'labeled' && vars.AUTOMATIC_HOSTED_CI == 'true' && !github.event.pull_request.draft)
