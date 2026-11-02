@@ -1,0 +1,33 @@
+---
+title: "{{exp_id}} — {{title}}"
+analysis:
+  modality: "{{platform}}"
+  role: mixed
+  # Opt into collaborator/publication only after reviewing the derived view.
+  share: [internal]
+---
+
+```{r}
+#| label: setup
+here::i_am("analysis/{{exp_id}}.qmd")
+source("~/code/seekit/tools/reload_helpers.R")
+if (exists("start_session_log")) start_session_log("session.log")
+suppressMessages({ library(CATALYST); library(SingleCellExperiment); library(ggplot2); library(qs2) })
+set.seed(1234)
+data_dir <- "{{data_dir}}"
+```
+
+# Load
+
+```{r}
+#| label: load
+# sce <- qs_read(file.path(data_dir, "<object>.qs2"))
+```
+
+# Figures
+
+```{r}
+#| label: first-figure
+# p <- plotDR2(sce, dr = "UMAP", color_by = "...")
+# f2(p, w = 10, h = 6, format = "svg", embed = TRUE)
+```

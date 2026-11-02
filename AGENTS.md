@@ -12,8 +12,10 @@ Read [`README.md`](README.md) and [`docs/GETTING_STARTED.md`](docs/GETTING_START
 figtracer's job is to keep the **figures** an analysis produces in sync with the **lab note**
 that describes them, with provenance. When you save a figure, also write its manifest line:
 
-- **R:** `saveFig(plot, title = "…")` (from `seekit`, or the bundled `r/figtracer.R` shim).
-- **Python:** `figtracer.savefig(fig, title = "…")`.
+- **R:** `saveFig(plot, title = "…", embed = TRUE)`, from the saver that ships with figtracer: `source(system2("figtracer", "r-saver", stdout = TRUE))`. A compatible package's savers with the same names write the same records.
+- **Python:** `figtracer.savefig(fig, title = "…", embed=True)`. `embed` marks a figure for the note and defaults to FALSE in both; table savers (`saveTable()`, `savetable()`) default to TRUE.
+
+The notebook contract figrun relies on, for R and Python, is [`docs/NOTEBOOKS.md`](docs/NOTEBOOKS.md).
 
 Each call writes the figure **and** one line to `outputs/MANIFEST.jsonl` (title, size, source
 file, git commit). Then:

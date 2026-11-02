@@ -68,6 +68,83 @@ def test_read_docx_paragraphs_resolve_tracked_changes(tmp_path):
     assert doc.unit_label(fig3.unit) == "¶ 4"
 
 
+def _revised(tmp_path):
+    return _docx(tmp_path, [
+        [("t", "Cells were sorted"), ("ins", " twice"), ("t", " from D1 "), ("field-del", "(3, 4)"), ("t", ".")],
+        [("t", "A sentence that ends"), ("mark", "del")],
+        [("t", " here, joined on accept.")],
+        [("cstart", "0"), ("t", "Treated cells "), ("del", "did not "), ("t", "expanded."), ("cend", "0"),
+         ("tab", ""), ("moveTo", "Moved here.")],
+        [("moveFrom", "Moved here."), ("t", "Kept.")],
+        [("del", "A paragraph deleted whole "), ("field-del", "(5)"), ("mark", "del")],
+        [("t", "Last.")],
+    ], comments={"0": ("D2", "Check against the figure.")})
+
+
+def test_read_docx_drops_the_result_of_a_field_whose_codes_are_deleted(tmp_path):
+    # Word's accept-all removes the result text with the deleted codes; read() follows Word.
+    doc = ooxml.read(_revised(tmp_path))
+    assert doc.paragraphs[0].text == "Cells were sorted twice from D1 ."
+    # unit numbering is unchanged: one Paragraph per w:p, joins or not
+    assert len(doc.paragraphs) == 7 and doc.paragraphs[1].text == "A sentence that ends"
+
+
+def test_revisions_accepted_view_joins_a_deleted_paragraph_mark(tmp_path):
+    r = ooxml.revisions(_revised(tmp_path))
+    acc = r.view("accepted")
+    assert acc[0] == (1, "Cells were sorted twice from D1 .")
+    assert acc[1] == (2, "A sentence that ends here, joined on accept.")
+    assert acc[2] == (4, "Treated cells expanded.\tMoved here.")
+    assert acc[3] == (5, "Kept.")
+    # a paragraph deleted whole joins the next and adds nothing to it
+    assert acc[4] == (6, "Last.")
+    assert len(acc) == 5
+
+
+def test_revisions_original_and_markup_views(tmp_path):
+    r = ooxml.revisions(_revised(tmp_path))
+    orig = dict(r.view("original"))
+    assert orig[1] == "Cells were sorted from D1 (3, 4)."
+    assert orig[4] == "Treated cells did not expanded.\t"
+    assert orig[5] == "Moved here.Kept."
+    markup = dict(r.view("markup", who=True))
+    # initials of the author, D1 -> D
+    assert markup[1] == "Cells were sorted{+ twice|D+} from D1 (3, 4)."
+    assert markup[2] == "A sentence that ends ¶-"
+    assert "[-did not |?-]" in markup[4] and "{>Moved here.|D>}" in markup[4]
+    assert markup[5].startswith("[<Moved here.|?<]")
+    with pytest.raises(ValueError):
+        r.view("final")
+
+
+def test_revisions_warn_only_where_the_field_result_survives(tmp_path):
+    r = ooxml.revisions(_revised(tmp_path))
+    # paragraph 6 is deleted whole, so losing its "(5)" loses nothing
+    assert [(w.unit, w.result) for w in r.field_warnings] == [(1, "(3, 4)")]
+
+
+def test_revisions_comments_carry_their_accepted_anchor(tmp_path):
+    r = ooxml.revisions(_revised(tmp_path))
+    (c,) = r.comments
+    assert (c.id, c.author, c.text, c.unit) == ("0", "D2", "Check against the figure.", 4)
+    assert c.anchor == "Treated cells expanded."
+    assert r.paragraphs[3].comments == ["0"]
+
+
+def test_revisions_summarise_changes_by_author(tmp_path):
+    r = ooxml.revisions(_revised(tmp_path))
+    kinds = {row["kind"]: row for row in r.by_author()}
+    assert kinds["ins"]["count"] == 1 and kinds["ins"]["chars"] == len(" twice")
+    assert kinds["paragraph mark del"]["count"] == 2
+    # the older fixture runs carry no author, which reads as "?"
+    assert {row["author"] for row in r.by_author()} == {"D1", "?"}
+
+
+def test_revisions_refuses_a_deck(tmp_path):
+    with pytest.raises(ValueError):
+        ooxml.revisions(_deck(tmp_path))
+
+
 def test_read_refuses_other_formats(tmp_path):
     p = tmp_path / "x.xlsx"
     p.write_bytes(b"")

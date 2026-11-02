@@ -6,6 +6,7 @@ import json
 import os
 import re
 import string
+import sys
 from datetime import datetime
 
 from . import config
@@ -73,7 +74,16 @@ def _fill(template: str, mapping: dict) -> str:
 # closed "out of scope"; posit-dev/positron#6977, closed "expected"), so `#| label:` is the only
 # route and always will be. knitr treats the two forms identically — both land in params$label —
 # so opts_current$get("label") and f2()'s title fallback are unaffected.
-def _qmd_stub(exp_id: str, title: str, data_dir: str, platform: str = "other") -> str:
+#
+# The default notebook names no lab package: the savers come from the installed figtracer, and
+# ggplot2 is the only library it loads. A lab's own setup is an analysis template, as the Wing Lab
+# one is (`seekit`), chosen per experiment or by `analysis_template` in the user config.
+def _qmd_stub(exp_id: str, title: str, data_dir: str, platform: str = "other",
+              r_dir: str | None = None) -> str:
+    # The experiment's R/ folder, beside data/: functions kept there as .R files are
+    # sourced by the setup chunk, which figrun then reads as the notebook's own.
+    if r_dir is None:
+        r_dir = os.path.join(os.path.dirname(data_dir), "R")
     return f'''---
 title: "{exp_id} — {title}"
 analysis:
@@ -85,27 +95,37 @@ analysis:
 
 ```{{r}}
 #| label: setup
-here::i_am("analysis/{exp_id}.qmd")
-source("~/code/seekit/tools/reload_helpers.R")
-if (exists("start_session_log")) start_session_log("session.log")
-suppressMessages({{ library(CATALYST); library(SingleCellExperiment); library(ggplot2); library(qs2) }})
+# saveFig() and saveTable() from the installed figtracer: each save appends a record to
+# outputs/MANIFEST.jsonl naming this notebook and the chunk that made it.
+source(system2("figtracer", "r-saver", stdout = TRUE))
+library(ggplot2)
 set.seed(1234)
 data_dir <- "{data_dir}"
+# Functions kept as .R files in the experiment's R/ folder, sourced when it exists.
+r_dir <- "{r_dir}"
+if (dir.exists(r_dir)) for (f in list.files(r_dir, pattern = "[.][Rr]$", full.names = TRUE)) source(f)
 ```
 
 # Load
 
 ```{{r}}
 #| label: load
-# sce <- qs_read(file.path(data_dir, "<object>.qs2"))
+# df <- read.csv(file.path(data_dir, "<file>.csv"))
 ```
 
 # Figures
 
 ```{{r}}
 #| label: first-figure
-# p <- plotDR2(sce, dr = "UMAP", color_by = "...")
-# f2(p, w = 10, h = 6, format = "svg", embed = TRUE)
+# p <- ggplot(df, aes(x = <x>, y = <y>)) + geom_point()
+# saveFig(p, title = "first_figure", w = 6, h = 4, format = "svg", embed = TRUE)
+```
+
+# Tables
+
+```{{r}}
+#| label: first-table
+# saveTable(df, title = "first_table", digits = 2)
 ```
 '''
 
@@ -134,9 +154,14 @@ def _analysis_template(name: str, templates_dirs: list) -> tuple[str, str | None
             return qmd, (plan if os.path.isfile(plan) else None)
     known = sorted({os.path.basename(f)[:-len(".qmd")]
                     for d in dirs for f in glob.glob(os.path.join(d, "*.qmd"))})
+    # The template that loads seekit was renamed `seekit` in 0.5.0. Its old name is not
+    # written here (the public tree may not hold it), so every unknown name is told the new one;
+    # a configured old name is refused, never replaced by the generic stub.
     raise ValueError(
         f"--analysis-template {name!r}: no {name}.qmd in {' or '.join(dirs)}. "
-        f"Available: {', '.join(known) if known else '(none)'}")
+        f"Available: {', '.join(known) if known else '(none)'}. The notebook setup that loads "
+        f"seekit is the template `seekit`, its name since 0.5.0 (`analysis_template: seekit` "
+        f"in config.yaml)")
 
 
 def _r_path(path: str) -> str:
@@ -281,7 +306,7 @@ def new(project: str, title: str, platform: str | None = None,
     p = config.project(project, cfg)
     # An analysis template is opt-in and is resolved before anything is created, so a mistyped
     # name is a clear error and not a half-scaffolded tree spread across the vault and the data
-    # root. Without it the notebook is the three-chunk stub, exactly as before.
+    # root. Without it the notebook is the generic stub, `_qmd_stub`.
     template_qmd = template_plan = None
     if analysis_template is not None:
         if existing_data:
@@ -402,9 +427,10 @@ def new(project: str, title: str, platform: str | None = None,
     if template_qmd:
         # The notebook and its run plan are filled from the same mapping, so the plan's `qmd`
         # names the notebook it sits beside. Paths go in as R strings: the experiment root for
-        # setwd() / here::i_am(), and the vault folder the merge canvas is read from.
+        # setwd() / here::i_am(), the vault folder the merge canvas is read from, and data/.
         mapping = {"exp_id": exp_id, "title": title, "platform": platform,
-                   "exp_root": _r_path(data_base), "note_dir": _r_path(note_folder)}
+                   "exp_root": _r_path(data_base), "note_dir": _r_path(note_folder),
+                   "data_dir": _r_path(data_dir)}
         with open(template_qmd, encoding="utf-8") as fh:
             body = _fill(fh.read(), mapping)
         with open(qmd_path, "w", encoding="utf-8") as fh:
@@ -432,10 +458,26 @@ def new(project: str, title: str, platform: str | None = None,
 
 def run(args) -> int:
     cfg = config.load(args.config) if args.config else None
-    res = new(args.project, args.title, platform=args.platform, cfg=cfg, stamp=args.stamp,
-              existing_data=getattr(args, "data_dir", None),
-              exp_id=getattr(args, "exp_id", None),
-              analysis_template=getattr(args, "analysis_template", None))
+    existing_data = getattr(args, "data_dir", None)
+    analysis_template = getattr(args, "analysis_template", None)
+    # A lab whose every notebook starts from its own template names it once, as
+    # `analysis_template` in the user config. --data-dir keeps the notebook the run folder
+    # already has, so the configured default does not apply there.
+    configured = analysis_template is None and not existing_data
+    if configured:
+        analysis_template = config.user_config().get("analysis_template") or None
+    try:
+        res = new(args.project, args.title, platform=args.platform, cfg=cfg, stamp=args.stamp,
+                  existing_data=existing_data,
+                  exp_id=getattr(args, "exp_id", None),
+                  analysis_template=analysis_template)
+    except ValueError as err:
+        # A refusal, not a crash: an unknown template (a configured one renamed since, a
+        # typo), a bad --id, a template with --data-dir. Nothing has been written yet.
+        where = f"analysis_template in {config._USER_CONFIG}: " \
+            if configured and analysis_template else ""
+        print(f"figtracer new: {where}{err}", file=sys.stderr)
+        return 2
     from . import index_cmd
     idx = index_cmd.rebuild(args.project, cfg=cfg)
     res["dashboard"] = idx.get("dashboard")

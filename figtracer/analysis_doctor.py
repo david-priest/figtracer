@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from functools import lru_cache
+import io
 import json
 from pathlib import Path
 import re
 import sys
+import tokenize
 from typing import Any
 
 import yaml
@@ -22,6 +24,36 @@ import yaml
 PROFILES = ("internal", "collaborator", "publication")
 ROLES = ("process", "curate", "figures", "mixed")
 SKIP_DIRS = {".git", ".quarto", "_freeze", "_site", "_book", "outputs"}
+# Chunk languages a figrun run addresses by label (R now, Python next). Other fenced
+# languages (bash, mermaid, raw `{=html}` blocks) are never run by label, so the label
+# checks leave them alone.
+RUN_LANGUAGES = ("r", "python")
+RUN_LANGUAGE_NAMES = {"r": "R", "python": "Python"}
+# Which question each rule answers, reported as `group` on every finding. `execution`:
+# can the notebook be parsed, run chunk by chunk by label, and its saves attributed to a
+# chunk. `policy`: the lab's conventions and the rules of the collaborator and publication
+# views; none of these decides whether the notebook runs. A new rule must be added here.
+RULE_GROUPS = {
+    "QMD000": "execution",
+    "QMD001": "execution",
+    "QMD004": "execution",
+    "QMD005": "execution",
+    "QMD008": "execution",
+    "QMD009": "execution",
+    "FIG001": "execution",
+    "TAB001": "execution",
+    "QMD002": "policy",
+    "QMD003": "policy",
+    "QMD006": "policy",
+    "QMD007": "policy",
+    "SHARE001": "policy",
+    "SHARE002": "policy",
+    "SHARE003": "policy",
+    "SHARE004": "policy",
+}
+GROUPS = ("execution", "policy")
+# seekit's logger, accepted by default so existing notebooks keep passing QMD006.
+DEFAULT_SESSION_LOGGERS = ("start_session_log",)
 
 
 @lru_cache(maxsize=1)
@@ -46,10 +78,45 @@ def _legacy_names() -> tuple[str, ...]:
     except TypeError:
         return ()
 
+
+@lru_cache(maxsize=1)
+def _session_loggers() -> tuple[str, ...]:
+    """Calls that start a session log, for QMD006: seekit's `start_session_log` plus any
+    named in the labkit user config:
+
+        session_loggers: [open_run_log, logging.basicConfig]     # ~/.config/labkit/config.yaml
+
+    The configured names are added to the default, never replace it. A name counts when the
+    notebook's code calls it (a comment or a string does not); a dotted name matches the
+    qualified call. Read defensively, as `_legacy_names` is: no config means the default.
+    """
+    try:
+        from labkit import config as lkconfig
+        raw = lkconfig.user_config().get("session_loggers") or []
+    except Exception:
+        raw = []
+    if isinstance(raw, str):
+        raw = [raw]
+    try:
+        extra = tuple(n for n in (str(x).strip() for x in raw) if n)
+    except TypeError:
+        extra = ()
+    return tuple(dict.fromkeys(DEFAULT_SESSION_LOGGERS + extra))
+
 FENCE_OPEN = re.compile(r"^\s*(`{3,})\{([^}]+)\}\s*$")
 FENCE_CLOSE = re.compile(r"^\s*`{3,}\s*$")
 PRIVATE_PATH = re.compile(r"(?:/Users/[^\s\"'`)]+|~/[^\s\"'`)]+|[A-Za-z]:\\[^\s\"']+)")
-FIGURE_CALL = re.compile(r"\b(?:f2|saveFig)\s*\(")
+# The calls that save a figure or a table, per chunk language: (figure, table). In Python a
+# bare or `figtracer.`-qualified call counts and an attribute call does not, so matplotlib's
+# `plt.savefig(...)` is not taken for figtracer's `savefig(fig, title=...)`.
+SAVE_CALLS = {
+    "r": (re.compile(r"\b(?:f2|saveFig)\s*\("), re.compile(r"\bsaveTable\s*\(")),
+    "python": (re.compile(r"(?:\b(?:figtracer|savefig)\.|(?<![\w.]))savefig\s*\("),
+               re.compile(r"(?:\b(?:figtracer|savetable)\.|(?<![\w.]))savetable\s*\(")),
+}
+HERE_CALL = re.compile(r"\bhere::here\b")
+HERE_ANCHOR = re.compile(r"\bi_am\s*\(")
+HEADER_EVAL_OFF = re.compile(r",\s*eval\s*=\s*(?:FALSE|F)\s*(?:,|$)")
 STOCHASTIC_CALLS = {
     "FindClusters": re.compile(r"\bFindClusters\s*\("),
     "RunUMAP": re.compile(r"\bRunUMAP\s*\("),
@@ -70,6 +137,7 @@ class Chunk:
     options: dict[str, Any]
     body: str
     start_line: int
+    header: str = ""
 
 
 @dataclass
@@ -105,6 +173,7 @@ def _finding(rule_id: str, level: str, doc: Document, message: str, action: str,
         "message": message,
         "action": action,
         "autofix": False,
+        "group": RULE_GROUPS[rule_id],
     }
     if line is not None:
         item["line"] = line
@@ -192,6 +261,7 @@ def _chunks(lines: list[str]) -> tuple[list[Chunk], list[tuple[int, str]]]:
             options=options,
             body="\n".join(body_lines),
             start_line=start + 1,
+            header=match.group(2),
         ))
         i += 1
     return chunks, problems
@@ -245,15 +315,98 @@ def _stochastic_calls(chunk: Chunk) -> list[str]:
 
 
 def _active_code(chunk: Chunk) -> str:
-    """Drop full-line R comments/options before call detection.
+    """The chunk's code with comments and the text of string literals removed, for every
+    check that looks for a call.
 
     Public notebooks often explain an available helper in a setup comment (for example
-    ``# f2() provides ...``). Treating that prose as an actual call makes the harness noisy.
+    ``# f2() provides ...``), and a guard such as ``exists("start_session_log")`` names a
+    function in a string. Neither is a call: a comment must not satisfy a check (QMD005,
+    QMD006) or trip one (SHARE002). Python is tokenized; R and other languages are read
+    line by line with the quote rules of figrun's `strip_r_comments` and `strip_r_strings`.
     """
-    return "\n".join(
-        line for line in chunk.body.splitlines()
-        if not line.lstrip().startswith("#")
-    )
+    if chunk.language == "python":
+        return _strip_python(chunk.body)
+    return _strip_line_code(chunk.body)
+
+
+def _strip_line_code(src: str) -> str:
+    """`src` with `#` comments cut and the text inside quotes dropped, the quotes kept.
+
+    Single and double quotes take backslash escapes; text inside backticks (an R name) is
+    kept, and a `#` or quote inside it is not a comment or a string. A line whose quote never
+    closes (a string running on to the next line) is kept as it stands, as figrun does: the
+    tracking cannot be trusted there, and keeping the text cannot hide a call.
+    """
+    out = []
+    for line in src.split("\n"):
+        kept, quote, i, n = [], None, 0, len(line)
+        while i < n:
+            ch = line[i]
+            if quote is not None:
+                if ch == "\\" and quote != "`":
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote = None
+                    kept.append(ch)
+                elif quote == "`":
+                    kept.append(ch)
+            elif ch == "#":
+                break
+            else:
+                kept.append(ch)
+                if ch in "\"'`":
+                    quote = ch
+            i += 1
+        out.append(line if quote in ("'", '"') else "".join(kept))
+    return "\n".join(out)
+
+
+def _strip_python(src: str) -> str:
+    """`src` with comment and string tokens blanked, so line and column numbers hold.
+
+    A chunk the tokenizer refuses (an unclosed bracket, a dedent that matches no indent) is
+    read line by line instead.
+    """
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return _strip_line_code(src)
+    drop = {tokenize.COMMENT, tokenize.STRING}
+    if hasattr(tokenize, "FSTRING_MIDDLE"):          # Python 3.12 splits f-strings
+        drop.add(tokenize.FSTRING_MIDDLE)
+    lines = src.split("\n")
+    for tok in tokens:
+        if tok.type not in drop:
+            continue
+        (sr, sc), (er, ec) = tok.start, tok.end
+        if sr == er:
+            line = lines[sr - 1]
+            lines[sr - 1] = line[:sc] + " " * (ec - sc) + line[ec:]
+        else:
+            lines[sr - 1] = lines[sr - 1][:sc]
+            for row in range(sr, er - 1):
+                lines[row] = ""
+            lines[er - 1] = " " * ec + lines[er - 1][ec:]
+    return "\n".join(lines)
+
+
+def _evaluated(chunk: Chunk) -> bool:
+    """False for a chunk switched off with `#| eval: false` or a legacy `eval=FALSE`
+    header, the two forms figrun reads."""
+    if "eval" in chunk.options:
+        return str(chunk.options["eval"]).strip().lower() not in ("false", "f", "no")
+    return not HEADER_EVAL_OFF.search(chunk.header)
+
+
+def _saves(chunk: Chunk, code: str) -> tuple[bool, bool]:
+    """Whether the chunk's code calls a figure saver and a table saver."""
+    figure, table = SAVE_CALLS.get(chunk.language, (None, None))
+    return (bool(figure and figure.search(code)), bool(table and table.search(code)))
+
+
+def _calls_any(code: str, names: tuple[str, ...]) -> bool:
+    return any(re.search(rf"\b{re.escape(name)}\s*\(", code) for name in names)
 
 
 def check_document(doc: Document, profile: str) -> list[dict]:
@@ -308,12 +461,31 @@ def check_document(doc: Document, profile: str) -> list[dict]:
 
     for chunk in doc.chunks:
         code = _active_code(chunk)
-        if FIGURE_CALL.search(code):
-            if not chunk.label:
+        # Every chunk a run may address needs a label: figrun runs chunks by label and drops
+        # an unlabelled one from its plan, and a saver records the label as provenance. A
+        # chunk that is switched off, or holds nothing but comments, is not addressed.
+        if (chunk.language in RUN_LANGUAGES and not chunk.label and _evaluated(chunk)
+                and code.strip()):
+            figure, table = _saves(chunk, code)
+            level = _level(profile, internal="WARN", collaborator="ERROR")
+            action = "Add `#| label: <stable-name>` so a run can address it"
+            if figure:
                 findings.append(_finding(
-                    "FIG001", _level(profile, internal="WARN", collaborator="ERROR"), doc,
-                    "a figure-saving chunk has no label",
-                    "Add `#| label: <stable-name>` so figure provenance can identify its source.",
+                    "FIG001", level, doc, "a figure-saving chunk has no label",
+                    action + " and figure provenance can identify its source.",
+                    line=chunk.start_line,
+                ))
+            elif table:
+                findings.append(_finding(
+                    "TAB001", level, doc, "a table-saving chunk has no label",
+                    action + " and table provenance can identify its source.",
+                    line=chunk.start_line,
+                ))
+            else:
+                findings.append(_finding(
+                    "QMD009", level, doc,
+                    f"an executable {RUN_LANGUAGE_NAMES[chunk.language]} chunk has no label",
+                    action + ", or mark it `#| eval: false` if it is scratch.",
                     line=chunk.start_line,
                 ))
 
@@ -340,18 +512,26 @@ def check_document(doc: Document, profile: str) -> list[dict]:
                 line=chunk.start_line, chunk=chunk.label,
             ))
 
-    if "here::here" in doc.text and "here::i_am" not in doc.text:
+    # Calls in the code of the chunks that run; prose, comments and strings do not count.
+    run_code = [_active_code(c) for c in doc.chunks if _evaluated(c)]
+    r_code = [_active_code(c) for c in doc.chunks if c.language == "r" and _evaluated(c)]
+    if (any(HERE_CALL.search(code) for code in r_code)
+            and not any(HERE_ANCHOR.search(code) for code in r_code)):
         findings.append(_finding(
             "QMD005", _level(profile, internal="WARN", collaborator="WARN"), doc,
             "the notebook uses here::here() without anchoring the project with here::i_am()",
             "Add a stable here::i_am() declaration near setup.",
         ))
 
-    if profile == "internal" and "start_session_log" not in doc.text:
+    # Not an execution check: a run does not need the notebook to open a log. Without one,
+    # interactive runs of the notebook leave no console record.
+    loggers = _session_loggers()
+    if profile == "internal" and not any(_calls_any(code, loggers) for code in run_code):
         findings.append(_finding(
             "QMD006", "WARN", doc,
-            "no session log initialisation was found",
-            "Start the standard session log unless this notebook is intentionally read-only.",
+            f"no session logger ({', '.join(loggers)}) is called, so interactive runs are not logged",
+            "Call a session logger in setup (add yours under `session_loggers:` in "
+            "~/.config/labkit/config.yaml), or suppress QMD006 if the notebook is intentionally read-only.",
         ))
 
     for legacy in _legacy_names():
@@ -391,7 +571,7 @@ def diagnose(target: str | Path, profile: str = "internal",
         findings.append({
             "rule_id": "QMD000", "level": "ERROR", "path": str(root),
             "message": "no QMD files were found", "action": "Pass a QMD file or a directory containing QMDs.",
-            "autofix": False,
+            "autofix": False, "group": RULE_GROUPS["QMD000"],
         })
 
     for path in paths:
@@ -409,19 +589,29 @@ def diagnose(target: str | Path, profile: str = "internal",
             else:
                 findings.append(finding)
         analysis = doc.analysis
+        saves = [_saves(c, _active_code(c)) for c in doc.chunks]
         documents.append({
             "path": str(path),
             "modality": analysis.get("modality"),
             "role": analysis.get("role"),
             "share": sorted(_share_values(analysis.get("share"))),
             "chunks": len(doc.chunks),
-            "figure_chunks": sum(bool(FIGURE_CALL.search(_active_code(c))) for c in doc.chunks),
+            "figure_chunks": sum(figure for figure, _ in saves),
+            "table_chunks": sum(table for _, table in saves),
             "stochastic_chunks": sum(bool(_stochastic_calls(c)) for c in doc.chunks),
         })
 
     order = {"ERROR": 0, "WARN": 1, "INFO": 2}
     findings.sort(key=lambda f: (order[f["level"]], f["path"], f.get("line", 0), f["rule_id"]))
     counts = {level: sum(f["level"] == level for f in findings) for level in order}
+    groups = {}
+    for group in GROUPS:
+        n = {level: sum(f["level"] == level and f["group"] == group for f in findings)
+             for level in order}
+        groups[group] = {
+            "status": "BLOCKED" if n["ERROR"] else "READY",
+            "errors": n["ERROR"], "warnings": n["WARN"], "info": n["INFO"],
+        }
     return {
         "schema_version": 1,
         "command": "figtracer doctor analysis",
@@ -434,6 +624,7 @@ def diagnose(target: str | Path, profile: str = "internal",
             "warnings": counts["WARN"],
             "info": counts["INFO"],
             "suppressed": len(suppressed),
+            "groups": groups,
         },
         "findings": findings,
         "suppressed": suppressed,
@@ -449,7 +640,7 @@ def _print_human(result: dict[str, Any]) -> None:
         location = finding["path"]
         if finding.get("line"):
             location += f":{finding['line']}"
-        print(f"[{finding['level']} {finding['rule_id']}] {location}")
+        print(f"[{finding['level']} {finding['rule_id']} · {finding['group']}] {location}")
         print(f"  {finding['message']}")
         print(f"  action: {finding['action']}\n")
     if not result["findings"]:
@@ -458,6 +649,7 @@ def _print_human(result: dict[str, Any]) -> None:
         f"{result['status']}: {summary['errors']} error(s), {summary['warnings']} warning(s), "
         f"{summary['info']} info; {summary['suppressed']} suppressed"
     )
+    print("; ".join(f"{group} {g['status']}" for group, g in summary["groups"].items()))
 
 
 def build_parser() -> argparse.ArgumentParser:

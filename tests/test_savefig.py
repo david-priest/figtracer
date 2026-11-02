@@ -30,7 +30,8 @@ def test_savefig_record_and_resolves(tmp_path):
     assert rec["title"] == "umap_level1"
     assert rec["fig_format"] == "svg"
     assert (rec["width_in"], rec["height_in"]) == (6.0, 4.0)
-    assert rec["embed"] is True and rec["channel"] == "note"
+    # A figure is for a note only when asked: embed defaults to False, as R saveFig() does.
+    assert rec["embed"] is False and rec["channel"] == "note"
     assert rec["tool"] == "figtracer.savefig"
 
     # figure written under a dated subfolder; MANIFEST at outputs/ root
@@ -44,6 +45,16 @@ def test_savefig_record_and_resolves(tmp_path):
     idx = manifest.load_index(str(manifest_path))
     assert "umap_level1" in idx
     assert os.path.abspath(idx["umap_level1"].path) == os.path.abspath(str(fpath))
+
+
+def test_figures_default_to_embed_false_and_tables_to_true(tmp_path):
+    """David, 2026-11-02: figure savers default to embed=False and table savers to True, as
+    seekit's f2()/saveFig() and saveTable() do; the record says which."""
+    out = str(tmp_path / "outputs")
+    assert figtracer.savefig(FakeFig(), title="a", outputs=out)["embed"] is False
+    assert figtracer.savefig(FakeFig(), title="b", outputs=out, embed=True)["embed"] is True
+    assert figtracer.savetable([["donor"], ["D1"]], "t", outputs=out)["embed"] is True
+    assert figtracer.savetable([["donor"], ["D1"]], "u", outputs=out, embed=False)["embed"] is False
 
 
 def test_savefig_appends_and_single_dated_folder(tmp_path):

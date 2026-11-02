@@ -194,8 +194,8 @@ def test_provenance_index_lists_placed_tables(tmp_path):
 
 def test_savetable_writes_a_root_csv_and_a_table_manifest_line(tmp_path, capsys):
     out = tmp_path / "outputs"
-    rec = savetable.savetable([{"donor": "D1", "value": 0.42}, {"donor": "D2", "value": 0.13}],
-                              "cluster_medians", outputs=str(out), notebook="/x/nb.ipynb")
+    rec = savetable([{"donor": "D1", "value": 0.42}, {"donor": "D2", "value": 0.13}],
+                    "cluster_medians", outputs=str(out), notebook="/x/nb.ipynb")
     assert rec["kind"] == "table" and rec["rel_path"] == "cluster_medians.csv"
     assert rec["n_rows"] == 2 and rec["columns"] == ["donor", "value"]
     assert (out / "cluster_medians.csv").read_text() == "donor,value\nD1,0.42\nD2,0.13\n"
@@ -203,7 +203,7 @@ def test_savetable_writes_a_root_csv_and_a_table_manifest_line(tmp_path, capsys)
     assert line["title"] == "cluster_medians" and line["kind"] == "table"
     assert "cluster_medians.csv" in capsys.readouterr().out
     # overwritten in place: a second save is a newer line, not a second file
-    savetable.savetable([["donor", "value"], ["D1", 0.5]], "cluster_medians", outputs=str(out))
+    savetable([["donor", "value"], ["D1", 0.5]], "cluster_medians", outputs=str(out))
     assert (out / "cluster_medians.csv").read_text().splitlines()[1] == "D1,0.5"
     assert len((out / "MANIFEST.jsonl").read_text().strip().splitlines()) == 2
     assert figsync.resolve_tables(str(tmp_path), walk_up=False)["cluster_medians"]["_n"] == 2
@@ -212,4 +212,91 @@ def test_savetable_writes_a_root_csv_and_a_table_manifest_line(tmp_path, capsys)
 def test_savetable_refuses_an_unsafe_title(tmp_path):
     import pytest
     with pytest.raises(ValueError):
-        savetable.savetable([["a"], [1]], "../escape", outputs=str(tmp_path / "o"))
+        savetable([["a"], [1]], "../escape", outputs=str(tmp_path / "o"))
+
+
+# ── place --after ──────────────────────────────────────────────────────────────
+
+AFTER_NOTE = """---
+title: synthetic
+---
+
+# EXP
+
+## 1. Methods
+
+```r
+# not a heading
+```
+
+## 2. Results
+
+Results prose.
+
+### 2.1 Treated
+
+Treated prose.
+
+## 3. Conclusions
+
+# Log
+- entry
+"""
+
+
+def _place_after(data, note, title, after, table=True):
+    args = types.SimpleNamespace(title=title, note=os.path.basename(note), width=720,
+                                 link_style="obsidian", caption=None, yes=True, table=table,
+                                 after=after, _tables=figsync.resolve_tables(data, walk_up=False))
+    return figsync.cmd_place(args, "EXP", None, figsync.resolve_figures(data, walk_up=False), [note])
+
+
+def test_place_after_a_heading_goes_at_the_end_of_its_section(tmp_path, capsys):
+    data, _, note = _exp(tmp_path)
+    with open(note, "w", encoding="utf-8") as f:
+        f.write(AFTER_NOTE)
+    assert _place_after(data, note, "medians", "results") == 0
+    assert "(end of section ## 2. Results)" in capsys.readouterr().out
+    assert _place_after(data, note, "umap", "Results", table=False) == 0
+    text = open(note, encoding="utf-8").read()
+    begin = figsync._table_markers("EXP", "medians")[0]
+    # After the subsection, in the order placed, before the next section, with blank lines.
+    assert text.index("Treated prose.") < text.index(begin) < text.index("![[EXP_umap.png")
+    assert text.index("![[EXP_umap.png") < text.index("## 3. Conclusions")
+    assert "Treated prose.\n\n" + begin in text
+    assert "|720]]\n\n## 3. Conclusions" in text
+    assert text.endswith("# Log\n- entry\n")
+
+
+def test_place_after_the_last_section_goes_before_the_log_or_at_the_end(tmp_path):
+    data, _, note = _exp(tmp_path)
+    with open(note, "w", encoding="utf-8") as f:
+        f.write(AFTER_NOTE)
+    assert _place_after(data, note, "medians", "Conclusions") == 0
+    text = open(note, encoding="utf-8").read()
+    assert text.index("## 3. Conclusions") < text.index("figtracer:table") < text.index("# Log")
+    assert _place_after(data, note, "umap", "Log", table=False) == 0
+    assert open(note, encoding="utf-8").read().rstrip().endswith("|720]]")
+
+
+def test_place_after_refuses_a_heading_it_cannot_find_or_cannot_tell_apart(tmp_path, capsys):
+    data, _, note = _exp(tmp_path)
+    with open(note, "w", encoding="utf-8") as f:
+        f.write(AFTER_NOTE)
+    assert _place_after(data, note, "medians", "not a heading") == 2
+    assert "matched 0 heading(s)" in capsys.readouterr().err
+    assert _place_after(data, note, "medians", "") == 2             # every heading
+    assert _place_after(data, note, "medians", "Treat") == 0         # one, a subsection
+    assert open(note, encoding="utf-8").read().count("figtracer:table") == 2
+    with open(note, "a", encoding="utf-8") as f:
+        f.write("\n## 4. Results again\n")
+    assert _place_after(data, note, "umap", "results", table=False) == 2
+    assert "## 2. Results; ## 4. Results again" in capsys.readouterr().err
+    assert _place_after(data, note, "umap", "results again", table=False) == 0
+
+
+def test_a_heading_in_a_code_fence_or_the_frontmatter_is_not_a_heading():
+    text = "---\ntitle: x\n# no\n---\n\n```\n# Results\n```\n\n## Results\nbody\n"
+    end, names = figsync.section_end(text, "Results")
+    assert names == ["## Results"] and end == len(text)
+    assert figsync.section_end(text, "no") == (None, [])

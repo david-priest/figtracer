@@ -1,6 +1,6 @@
 {
-  "title": "figtracer: plain-text, provenance-tracked lab records from bench protocol to publication figure",
-  "description": "A command-line toolkit that keeps a lab's records — bench protocols, analysis figures, written lab notes, and project state — consistent, versioned, and plain-text, threading each figure to the code and git commit that produced it across R and Python.",
+  "title": "figtracer: provenance from analysis notebook chunks to the figures and tables in lab notes",
+  "description": "A command-line toolkit that keeps the figures and tables in Markdown lab notes in step with the R and Python notebook chunks that produced them. Each saved figure or table is recorded with its notebook, chunk and git commit in a manifest; labelled Quarto chunks can be re-run headlessly; and numbers written in a note are checked against the saved outputs. It does not depend on a particular analysis or plotting library.",
   "upload_type": "software",
   "license": "MIT",
   "access_right": "open",

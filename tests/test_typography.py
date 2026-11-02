@@ -1,6 +1,8 @@
 """Regression for R's ASCII-minus encoding; synthetic labels and values only."""
+import io
 import re
 import shutil
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -248,3 +250,136 @@ def test_plotmath_labels_survive_finished_pdf_twice(tmp_path):
     # figrun finishes a render that the R exporter already finished.
     typography.finish_pdf(str(path))
     assert PdfReader(path).pages[0].extract_text() == SYMBOL_TEXT
+
+
+
+# --- Arial in the form a placing application reads (Illustrator, VectorCraft) ---------------
+# Ghostscript's Arial subsets are symbolic, with no /Encoding and no Unicode cmap; Illustrator
+# shows their text as empty boxes. finish_pdf rewrites them as nonsymbolic fontTools subsets.
+
+def _require_gs_arial():
+    if not shutil.which("gs"):
+        pytest.skip("Ghostscript not installed")
+    try:
+        typography.arial_files()
+    except RuntimeError as error:
+        pytest.skip(str(error))
+    pytest.importorskip("fontTools")
+
+
+def _assert_standard(path):
+    from fontTools.ttLib import TTFont
+    reader = PdfReader(path)
+    arial = [font for font, _ in typography._fonts_in_use(reader.pages).values()
+             if "Arial" in str(font["/BaseFont"])]
+    assert arial
+    for font in arial:
+        descriptor = font["/FontDescriptor"].get_object()
+        assert int(descriptor["/Flags"]) & 4 == 0          # nonsymbolic
+        encoding = font["/Encoding"].get_object()
+        assert encoding["/BaseEncoding"] == "/WinAnsiEncoding"
+        ttf = TTFont(io.BytesIO(descriptor["/FontFile2"].get_object().get_data()))
+        assert ttf["cmap"].getcmap(3, 1) is not None       # a Unicode cmap
+        glyphs = set(ttf.getGlyphOrder())
+        named = [str(g)[1:] for g in encoding["/Differences"] if isinstance(g, NameObject)]
+        assert named and all(g in glyphs for g in named)
+
+
+def _ghostscript_finish(path):
+    """The form finish_pdf wrote before the rewrite: Ghostscript's symbolic Arial."""
+    files = typography.arial_files()
+    writer = PdfWriter()
+    writer.clone_document_from_reader(PdfReader(path))
+    typography._repair_r_fonts(writer)
+    fixed = path.with_name("fixed.pdf")
+    writer.write(fixed)
+    fontmap = path.with_name("Fontmap")
+    fontmap.write_text("\n".join(f"/{name} ({file}) ;" for name, file in files.items()))
+    font_dirs = ":".join(sorted({str(type(path)(f).parent) for f in files.values()}))
+    subprocess.run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=pdfwrite",
+                    "-dEmbedAllFonts=true", "-dSubsetFonts=true", f"-sFONTMAP={fontmap}",
+                    f"-sFONTPATH={font_dirs}", f"-sOutputFile={path}", str(fixed)],
+                   check=True, capture_output=True, timeout=120)
+
+
+@pytest.mark.parametrize("face", ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"])
+def test_finished_arial_is_nonsymbolic_with_an_encoding(tmp_path, face):
+    _require_gs_arial()
+    path = tmp_path / "figure.pdf"
+    write_r_pdf(path, face)
+    report = typography.finish_pdf(str(path))
+    assert report["standard_arial"] >= 1
+    _assert_standard(path)
+    text = PdfReader(path).pages[0].extract_text()
+    assert "IL-2 control" in text
+    assert "−3.5" in text
+
+
+def test_symbolic_ghostscript_arial_is_repaired_in_place(tmp_path):
+    _require_gs_arial()
+    path = tmp_path / "old.pdf"
+    write_r_pdf(path)
+    _ghostscript_finish(path)
+    assert typography._arial_state(PdfReader(path)) == "symbolic"
+    report = typography.finish_pdf(str(path))
+    assert report.get("repaired") and report["standard_arial"] >= 1
+    _assert_standard(path)
+    text = PdfReader(path).pages[0].extract_text()
+    assert "IL-2 control" in text
+    assert "CD4-negative" in text
+
+
+def test_standard_pdf_is_left_unchanged(tmp_path):
+    _require_gs_arial()
+    path = tmp_path / "figure.pdf"
+    write_r_pdf(path)
+    typography.finish_pdf(str(path))
+    before = path.read_bytes()
+    assert typography.finish_pdf(str(path)).get("already_finished")
+    assert path.read_bytes() == before
+
+
+
+def _symbol_faces(path):
+    return [str(font["/BaseFont"]) for font, _ in typography._fonts_in_use(PdfReader(path).pages).values()
+            if "Symbol" in str(font["/BaseFont"])]
+
+
+def test_plotmath_symbols_are_drawn_from_standard_arial(tmp_path):
+    # Ghostscript embeds a Symbol face for R's plotmath Greek and operators, and Illustrator
+    # shows its glyphs as boxes, as it did Ghostscript's Arial; they are drawn from Arial.
+    _require_gs_arial()
+    path = tmp_path / "plotmath.pdf"
+    write_plotmath_pdf(path)
+    typography.finish_pdf(str(path))
+    assert _symbol_faces(path) == []
+    _assert_standard(path)
+    assert PdfReader(path).pages[0].extract_text() == SYMBOL_TEXT
+    assert typography.finish_pdf(str(path)).get("already_finished")
+
+
+def test_embedded_symbol_face_is_repaired_in_place(tmp_path, monkeypatch):
+    # A plotmath render finished after the Arial rewrite and before this one: standard
+    # Arial, but Ghostscript's Symbol face still embedded.
+    _require_gs_arial()
+    path = tmp_path / "plotmath.pdf"
+    write_plotmath_pdf(path)
+    with monkeypatch.context() as patched:
+        patched.setattr(typography, "_is_embedded_symbol", lambda font: False)
+        typography.finish_pdf(str(path))
+    assert _symbol_faces(path)
+    assert typography._arial_state(PdfReader(path)) == "symbolic"
+    report = typography.finish_pdf(str(path))
+    assert report.get("repaired")
+    assert _symbol_faces(path) == []
+    _assert_standard(path)
+    assert PdfReader(path).pages[0].extract_text() == SYMBOL_TEXT
+
+def test_unicode_map_reads_bfchar_and_bfrange():
+    writer = PdfWriter()
+    stream = DecodedStreamObject()
+    stream.set_data(b"begincmap 2 beginbfchar <2D> <002D> <01> <2212> endbfchar "
+                    b"1 beginbfrange <41> <43> <0041> endbfrange endcmap")
+    font = DictionaryObject({NameObject("/ToUnicode"): writer._add_object(stream)})
+    mapped = typography._unicode_map(font)
+    assert mapped[0x2D] == "-" and mapped[0x01] == "−" and mapped[0x42] == "B"

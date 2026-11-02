@@ -1,0 +1,118 @@
+
+
+# ── Session log 2026-01-05 09:00:00 ── #
+# wd:    /tmp/exp
+# R:     R version 4.4.1 (2024-06-14)
+# user:  user1
+# host:  host1
+Session log started: /tmp/exp/session.log
+
+[WARN] package 'pkgA' was built under R version 4.4.3
+910 tests across 3 groups
+
+
+# ── Session log 2026-01-06 10:00:00 ── #
+# wd:    /tmp/exp
+# R:     R version 4.4.1 (2024-06-14)
+# user:  user1
+# host:  host1
+# notebook: a.qmd
+Session log started: /tmp/exp/session.log
+
+── [load-counts] (prerequisite) ───────────────────────────────────────
+loaded 1200 cells from 3 donors
+
+── [fig-a] ─────────────────────────────────────────────
+650 tests across 2 groups
+f2: fig-a -> outputs/a/fig-a.pdf
+
+
+# ── Session log 2026-01-07 11:00:00 ── #
+# wd:    /tmp/exp
+# R:     figrun --jobs, 2 workers
+# user:  user1
+# host:  host1
+# notebook: a.qmd
+
+# ── figrun worker 1 of 2: fig-a ── #
+figrun plan (3 chunks):
+     setup
+     load-counts
+   * fig-a
+
+── [setup] (prerequisite) ─────────────────────────────────────────────
+Session log already open at: /tmp/exp/.figrun/worker-1.log. Call stop_session_log() first.
+
+── [fig-a] ─────────────────────────────────────────────
+650 tests across 2 groups
+figrun: done — 3 chunks, 1 targeted
+
+# ── figrun worker 2 of 2: fig-b ── #
+figrun plan (2 chunks):
+     setup
+   * fig-b
+
+── [setup] (prerequisite) ─────────────────────────────────────────────
+Session log already open at: /tmp/exp/.figrun/worker-2.log. Call stop_session_log() first.
+
+── [fig-b] ─────────────────────────────────────────────
+[WARN] Removed 4 rows containing missing values
+figrun: done — 2 chunks, 1 targeted
+
+
+# ── Session log 2026-01-07 14:00:00 ── #
+# wd:    /tmp/exp
+# R:     R version 4.4.1 (2024-06-14)
+# user:  user1
+# host:  host1
+# notebook: c.qmd
+Session log started: /tmp/exp/session.log
+
+── [load-counts] ───────────────────────────────────────
+loaded 1200 cells from 3 donors
+
+── [save-object] (eval: FALSE, run anyway) ───────────────────────────────────────
+saved outputs/c/object.rds
+-- chunk fig-c skipped (eval: SHOW_FIGS is FALSE)
+
+── [fig-d] ─────────────────────────────────────────────
+f2: fig-d -> outputs/c/fig-d.pdf
+
+
+# ── Session log 2026-01-07 15:00:00 ── #
+# wd:    /tmp/exp
+# R:     R version 4.4.1 (2024-06-14)
+# user:  user1
+# host:  host1
+# notebook: c.qmd
+Session log started: /tmp/exp/session.log
+
+── [merge] (run plan 2/3) ─────────────────────────────────────────────
+12 clusters merged into 5 populations
+
+── [save-object] (run plan 3/3) ───────────────────────────────────────
+saved outputs/c/object.rds
+
+
+# ── Session log 2026-01-08 12:00:00 ── #
+# wd:    /tmp/exp
+# R:     R version 4.4.1 (2024-06-14)
+# user:  user1
+# host:  host1
+# notebook: b.qmd
+Session log started: /tmp/exp/session.log
+48 samples in 2 batches
+
+
+# ── Session log 2026-01-08 12:20:00 ── #
+# wd:    /tmp/exp
+# R:     R version 4.4.1 (2024-06-14)
+# user:  user1
+# host:  host1
+# notebook: b.qmd
+Session log continues: /tmp/exp/session.log
+48 samples in 2 batches
+
+[ERROR] object 'cells' not found
+
+# ── Session log closed 2026-01-08 12:30:00 ── #

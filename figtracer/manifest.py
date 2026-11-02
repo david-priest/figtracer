@@ -30,6 +30,16 @@ def kind(entry: dict) -> str:
     return str(entry.get("kind") or FIGURE)
 
 
+def embedded(entry: dict) -> bool:
+    """Whether an entry is marked for a note: its `embed` when the writer recorded one,
+    else the default of the savers that write its kind, false for a figure (`saveFig()`,
+    `f2()`, `savefig()`) and true for a table (`saveTable()`, `savetable()`)."""
+    value = entry.get("embed")
+    if value is None:
+        return kind(entry) == TABLE
+    return bool(value)
+
+
 def artefact_path(outputs: str, entry: dict) -> str:
     """Where an entry's file is, from the folder its MANIFEST sits in.
 

@@ -72,4 +72,27 @@ def require_chrome() -> str:
     )
 
 
-__all__ = ["find_chrome", "require_chrome"]
+def find_vectorcraft_cli() -> str | None:
+    """Locate vectorcraft-cli from an override, ``PATH``, or ``~/.local/bin``, where it is
+    installed and which is not on ``PATH`` in every shell."""
+    override = os.environ.get("FIGTRACER_VECTORCRAFT_CLI")
+    if override:
+        return _resolve_executable(override)
+    return (_resolve_executable("vectorcraft-cli")
+            or _resolve_executable(os.path.join("~", ".local", "bin", "vectorcraft-cli")))
+
+
+def require_vectorcraft_cli() -> str:
+    """Return the vectorcraft-cli executable or raise an actionable error."""
+    cli = find_vectorcraft_cli()
+    if cli:
+        return cli
+    override = os.environ.get("FIGTRACER_VECTORCRAFT_CLI")
+    detail = f" FIGTRACER_VECTORCRAFT_CLI={override!r} is not executable." if override else ""
+    raise FileNotFoundError(
+        "vectorcraft-cli not found on PATH or in ~/.local/bin. Install VectorCraft's command-line "
+        "tool or set FIGTRACER_VECTORCRAFT_CLI to its executable." + detail
+    )
+
+
+__all__ = ["find_chrome", "require_chrome", "find_vectorcraft_cli", "require_vectorcraft_cli"]

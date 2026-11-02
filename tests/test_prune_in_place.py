@@ -63,3 +63,53 @@ def test_prune_never_drops_a_file_a_surviving_render_uses(tmp_path):
     r = figsync.prune_old_renders(str(exp), keep=1, execute=False)
 
     assert r["files"] == [] and r["per_title"] == []
+
+
+def test_prune_leaves_a_table_that_shares_a_figure_title(tmp_path):
+    """A root CSV and a figure of one title: the table is not one of the renders.
+    Ranked with them, a CSV saved before the newest render was trashed with the
+    older renders."""
+    exp, outputs = _exp(tmp_path)
+    table = outputs / "group_vs_reference.csv"
+    table.write_text("group,value\ntreated,1\ncontrol,2\n")
+    renders = []
+    for stamp in ("10.00.00", "11.00.00"):
+        fig = outputs / "2026-01-02_EXP1" / f"2026-01-02_{stamp}_group_vs_reference.pdf"
+        fig.write_bytes(b"%PDF-1.4\n")
+        renders.append(fig)
+    _manifest(outputs, [
+        {"title": "group_vs_reference", "rel_path": os.path.relpath(renders[0], outputs),
+         "saved_at": "2026-01-02T10:00:00+0000", "embed": True},
+        {"title": "group_vs_reference", "kind": "table", "rel_path": "group_vs_reference.csv",
+         "saved_at": "2026-01-02T10:30:00+0000"},
+        {"title": "group_vs_reference", "rel_path": os.path.relpath(renders[1], outputs),
+         "saved_at": "2026-01-02T11:00:00+0000", "embed": True},
+    ])
+
+    r = figsync.prune_old_renders(str(exp), keep=1, execute=False)
+
+    assert str(table) not in r["files"]
+    assert r["files"] == [str(renders[0])]
+    assert r["per_title"] == [{"title": "group_vs_reference", "kept": 1, "dropped": 1,
+                               "files": [str(renders[0])]}]
+
+
+def test_prune_leaves_a_root_csv_whose_line_has_no_kind(tmp_path):
+    """A CSV at the root of outputs/ is a table even when its line names no kind,
+    which reads as a figure. With one figure render newer than it, the CSV was the
+    only "older render" of the title."""
+    exp, outputs = _exp(tmp_path)
+    table = outputs / "group_vs_reference.csv"
+    table.write_text("group,value\ntreated,1\ncontrol,2\n")
+    fig = outputs / "2026-01-02_EXP1" / "2026-01-02_11.00.00_group_vs_reference.pdf"
+    fig.write_bytes(b"%PDF-1.4\n")
+    _manifest(outputs, [
+        {"title": "group_vs_reference", "rel_path": "group_vs_reference.csv",
+         "saved_at": "2026-01-02T10:00:00+0000"},
+        {"title": "group_vs_reference", "rel_path": os.path.relpath(fig, outputs),
+         "saved_at": "2026-01-02T11:00:00+0000", "embed": True},
+    ])
+
+    r = figsync.prune_old_renders(str(exp), keep=1, execute=False)
+
+    assert r["files"] == [] and r["per_title"] == []

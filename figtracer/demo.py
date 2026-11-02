@@ -179,6 +179,7 @@ def run_demo(out_dir: str | Path = "figtracer-demo") -> dict:
         figure,
         title=FIGURE_TITLE,
         format="svg",
+        embed=True,
         outputs=str(outputs),
         notebook="analysis.py",
     )

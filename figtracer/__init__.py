@@ -7,5 +7,6 @@ console scripts keep working unchanged.
 __version__ = "0.1.0"
 
 from figtracer.savefig import savefig  # noqa: E402  (Python arm of f2 -> MANIFEST)
+from figtracer.savetable import savetable  # noqa: E402  (Python arm of saveTable -> MANIFEST)
 
-__all__ = ["savefig"]
+__all__ = ["savefig", "savetable"]

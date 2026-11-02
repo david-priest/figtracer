@@ -30,8 +30,11 @@ from dataclasses import dataclass, field
 
 # Written by seekit's start_session_log(); the chunk marker is emitted per chunk by
 # figrun and by a knit. A Positron "run all" writes the run header but no chunk
-# markers, so a block legitimately has zero chunks.
-RUN_HEADER = re.compile(r"^# ── Session log (.+?) ── #")
+# markers, so a block legitimately has zero chunks. The format is specified in
+# docs/SESSION_LOG.md, which lists these patterns; a test keeps the two the same.
+# stop_session_log() writes "# ── Session log closed <stamp> ── #", which is not a
+# run: read as one, it became the current run, holding no chunks.
+RUN_HEADER = re.compile(r"^# ── Session log (?!closed )(.+?) ── #")
 CHUNK_HEADER = re.compile(r"^── \[([^\]]+)\]")
 # Written into the header by seekit's start_session_log() when claim_session() has
 # claimed the R session (seekit-dev #53). Several notebooks in one experiment append to

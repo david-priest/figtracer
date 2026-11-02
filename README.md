@@ -23,11 +23,11 @@
   <a href="docs/GETTING_STARTED.md"><b>Get started</b></a> · <a href="#how-it-works">How it works</a> · <a href="#optional-let-a-coding-agent-operate-it">Use with a coding agent</a>
 </p>
 
-figtracer keeps a Markdown lab note in step with the R or Python analysis behind it. It does three things.
+figtracer keeps saved figures and tables connected to the notebooks that made them and to the Markdown notes that show them. It works through a documented manifest contract and labelled notebook chunks, so it does not depend on the analysis or plotting library: notebooks may be written in R or Python, and no lab-specific package is needed. It does three things.
 
 Figures and tables reach the note through a manifest. Each save appends one line recording the title, the notebook and chunk, and the git commit. The note embeds by title, and `figtracer figsync sync` replaces every embedded figure and table with its newest version and writes a provenance index beside the note.
 
-Figures are re-rendered from the notebook. `figtracer figrun` executes a notebook's figure chunks headlessly, by label, so a changed colour, threshold or axis label is drawn again without reopening the session. It runs chunk bodies verbatim, so it cannot draw anything the notebook does not define.
+Figures are re-rendered from the notebook. `figtracer figrun` executes a notebook's figure and table chunks headlessly, by label, in R or Python, so a changed colour, threshold or axis label is drawn again without reopening the session. It runs chunk bodies verbatim, so it cannot draw anything the notebook does not define.
 
 Numbers in the note are checked against the outputs. `figtracer notecheck` reports every number in a note that no current chunk, saved table or ledger produced, and names the chunk that last produced it.
 
@@ -56,28 +56,28 @@ Every figure or table save, from R, Python or a file registered from another ren
 
 A note embeds a figure by title. `figtracer figsync sync` resolves each embedded title to its newest render, rasterises it to a stable filename beside the note, regenerates every placed table from its CSV, and writes a provenance index listing the source and commit of everything in the note. After the analysis is re-run, the same command brings the note up to date without touching its prose, and `figsync drift` reports any embed whose attachment is older than the newest render.
 
-Two commands run the loop in the other direction. `figrun` takes an edit to the notebook back to a render, and `notecheck` takes a number in the note back to the chunk that produced it.
+Two commands run the loop in the other direction. `figrun` takes an edit to the notebook back to a render, and `notecheck` takes a number in the note back to the chunk that produced it. Both rely on labelled chunks and on savers that write the manifest line, and figrun also reads a role a chunk declares; [docs/NOTEBOOKS.md](docs/NOTEBOOKS.md) states the notebook contract for R and Python.
 
 
 The figure loop is one function call in an analysis you already have. `figrun` and `notecheck` need an experiment the registry knows about, since they resolve the notebook and the outputs through the experiment's note. Experiment scaffolding, a project dashboard and the end-of-session `sync` are a separate layer on top, described below.
 
 ## The figure loop
 
-R exports use a shared Arial policy through the bundled `saveFig()` and current seekit save helpers. PDF saves embed real regular, bold, italic and bold-italic Arial faces and keep text editable. Literal name hyphens are repaired at the PDF encoding boundary; genuine numeric negatives retain their minus signs. SVG/PNG saves render with Arial. This needs Ghostscript, fontconfig and all four Arial faces; missing fonts stop the export instead of silently substituting another face. `figrun` also checks PDFs from older writers, normalizes SVG fonts, and refuses an older PNG writer whose font policy cannot be verified after rasterisation. `figtracer fig typography generated.pdf` applies the PDF check to an existing generated file.
-
 This is the part to try first. It works in an existing analysis with any directory layout, in R
 or Python, with notes in any Markdown editor, and needs nothing else from figtracer.
 
 ```r
-# R — seekit's saveFig(), or figtracer's bundled dependency-free shim (no seekit needed):
-source("path/to/figtracer/r/figtracer.R")
-saveFig(p, title = "umap_level1")            # -> a figure + a MANIFEST line
+# R: the saver that ships with the installed figtracer CLI
+source(system2("figtracer", "r-saver", stdout = TRUE))
+saveFig(p, title = "example_scatter", embed = TRUE)   # -> a figure + a MANIFEST line
+saveTable(counts, title = "example_counts")    # -> outputs/example_counts.csv + a MANIFEST line
 ```
 
 ```python
-# Python / Jupyter — same layout, same MANIFEST contract, no R:
-from figtracer import savefig
-savefig(fig, title = "umap_level1")          # -> a figure + a MANIFEST line
+# Python or Jupyter: the same layout and MANIFEST contract, no R
+from figtracer import savefig, savetable
+savefig(fig, title="example_scatter", embed=True)     # -> a figure + a MANIFEST line
+savetable(counts, "example_counts")            # -> outputs/example_counts.csv + a MANIFEST line
 ```
 
 ```bash
@@ -86,13 +86,14 @@ figtracer fig register method_flow.svg --title fixation_method_flow \
   --source-kind generated-svg --generator "python render_method_flow.py"
 ```
 
-The figure is then in the manifest, and the note can follow its latest render:
+`embed = TRUE` marks a figure for the note. Figure savers default to FALSE, so a figure saved without it is recorded but not placed, synced or reported unplaced; table savers default to TRUE. The figure is then in the manifest, and the note can follow its latest render:
 
 - `figtracer figsync place <title> --note <note> -y` — write the embed into a note, in Markdown,
   HTML or Obsidian wikilink form.
 - `figtracer figsync sync` — rasterise the newest render of every embedded title to its stable
   attachment, and rewrite the provenance index.
 - `figtracer fig rasterise <figure.pdf> -o <figure.png> --dpi 300` — the PDF-to-PNG step `sync` uses, for a script that makes its own PNGs from PDF renders. Both run poppler's `pdftoppm` with the unembedded Helvetica of a base R `pdf()` file mapped to Arial, because on macOS poppler otherwise draws bold and oblique Helvetica as regular. Where Arial is not installed the PDF is rasterised as `pdftoppm` does by default, and one warning says so.
+- `figtracer fig superscript <figure.vectorcraft> --apply` — set the + and - of marker names (PD1+, CD45RA-) as superscript inside each text object of a VectorCraft document, with VectorCraft's command-line tool; a hyphen sign becomes a minus (U+2212) first, unless `--keep-hyphens`. Without `--apply` it lists the signs it would set. A PDF or SVG is converted to a VectorCraft document first, and the output is kept only if its text objects have the same count and ids as the input's, and the same text apart from those hyphens, so no text box is split. It is also refused when a character is not in the font it is set in, so that VectorCraft would draw it in its fallback font (Source Sans 3) and a `.ai` exported from it would embed that font: when a font lacks more characters than in the input, or lacks any in a font the run set a U+2212 in. The refusal names the characters and the text objects that hold them; `--accept-missing-glyphs` writes the output anyway, with the same report.
 - `figtracer figsync drift` — report embeds that are stale, not yet materialised, or have no
   registered source.
 - `figtracer fig embed <spec.yaml>` — compose panels into a multipanel figure and write it into a
@@ -103,21 +104,22 @@ writes Obsidian wikilinks instead, which carry the native resize handle. A Pytho
 must have `figtracer` installed in its own environment; command-line tools installed by `uv tool`
 are intentionally isolated.
 
-[`examples/cytof`](examples/cytof) runs the loop on two public CyTOF datasets, one analysed in R
-with `seekit` and one in Python with `scanpy`, and places figures from both in one lab note.
+R figures saved with the bundled `saveFig()`, or with another saver that calls the same exporter (`figtracer fig typography --r-helper` prints its path), follow a shared Arial policy. PDF saves embed real regular, bold, italic and bold-italic Arial faces and keep text editable. Literal name hyphens are repaired at the PDF encoding boundary; genuine numeric negatives retain their minus signs. SVG/PNG saves render with Arial. This needs Ghostscript, fontconfig and all four Arial faces; missing fonts stop the export instead of silently substituting another face. `figrun` also checks PDFs from older writers, normalizes SVG fonts, and refuses an older PNG writer whose font policy cannot be verified after rasterisation. `figtracer fig typography generated.pdf` applies the PDF check to an existing generated file.
 
 ## Re-rendering from the notebook
 
-Change an axis label, a threshold or a colour, and the figure has to be made again. `figrun` does that from the command line, from the `.qmd` itself.
+Change an axis label, a threshold or a colour, and the figure has to be made again. `figrun` does that from the command line, from the `.qmd` itself, for R and Python chunks.
 
 ![A blue response plot is redrawn in orange after a notebook edit: figrun loads the saved analysis, runs prerequisites and the selected plot chunk, skips configured expensive chunks and verifies the new render; figsync then replaces the note's embedded figure in place, without reopening the analysis session](docs/figtracer-figrun.svg)
 
 ```bash
 figtracer figrun --exp EXP01 --list          # what the notebook holds, and how each chunk is classified
-figtracer figrun --exp EXP01 umap-by-group   # re-render named chunks
+figtracer figrun --exp EXP01 example_scatter # re-render named chunks
 figtracer figrun --exp EXP01 --changed       # every figure chunk whose newest render predates the notebook's last edit
-figtracer figrun --exp EXP01 --awaiting      # figure chunks flagged for a note that have no render on record
+figtracer figrun --exp EXP01 --awaiting      # chunks whose figures or tables are flagged for a note and have no record
 ```
+
+figrun runs a notebook in the experiment's `analysis/` folder whose chunks carry unique `#| label:` options and save through a compatible saver. [docs/NOTEBOOKS.md](docs/NOTEBOOKS.md) states that contract in one place, with what figrun guarantees and refuses and a minimal R and Python notebook.
 
 It executes chunk bodies taken verbatim from the `.qmd`, by label, so it cannot draw anything that is not already in the notebook. The notebook remains the definition of what the figure is, and `figrun` only runs it. Prerequisites are worked out by dataflow analysis of the parse tree, so there is no chunk graph to maintain by hand, and figure calls in prerequisite chunks are muted, so nothing re-renders by accident.
 
@@ -125,14 +127,24 @@ Chunks that rebuild the analysis object itself, such as clustering, embedding, m
 
 Each render is verified before success is reported: the new manifest line must sit under this experiment's `outputs/`, point at this notebook, carry the chunk label, and refer to a file that is not a blank device. The chunk label is stamped into the manifest line, which is what makes `--changed` exact for figures whose titles are built at run time.
 
-`figrun` is R-only for now, and resolves the notebook through the experiment's note (`--qmd` picks among several). The R side needs `jsonlite`, `codetools`, `here` and `knitr`. Which calls count as "rebuilds the object" or "reloads the checkpoint", and how R is launched, are set in an optional `figrun:` block of `~/.config/labkit/config.yaml`; the defaults are one lab's CyTOF idioms (CATALYST's `prepData`, `computeSpillmat`, `compCytof`, `cluster` and `runDR`, that lab's wrappers `prepData2`, `compCytof2`, `cluster2` and `runDR2`, `mergeClusters`, `read.flowSet`, `read.FCS` and `qs_save`; `qs_read` for the reload) and yours will differ. A name counts when the chunk calls it, with or without a namespace prefix, so `cluster(` and `CATALYST::cluster(` both do; the same word in a comment, in a string, as a column or argument, or inside a longer name such as `cluster_ids(` does not. `expensive_calls_extra` adds names to the list in force. `expensive_calls` replaces the default list, and when that leaves a default out `figrun` says so in one line, before `--list` and at the start of a run, naming the calls that are no longer guarded:
+`figrun` runs R chunks (`{r}`) and Python chunks (`{python}`), and resolves the notebook through the experiment's note (`--qmd` picks among several). The R side needs `jsonlite`, `codetools`, `here` and `knitr`. Python chunks run in the experiment's own interpreter, the first of `--python PATH`, the experiment's `.venv/bin/python`, `figrun.python` in `config.yaml` and `python3` on `PATH`; figrun's Python engine needs only the standard library, and the notebook imports `figtracer` for `savefig()` and `savetable()`. One call runs one language: a call whose targets are R and Python chunks is refused, naming each language's targets, and so is a `#| figrun-after:` that names a chunk of the other language. `--jobs` splits Python targets across workers as it splits R ones.
+
+A chunk can declare what it is with a chunk option, `#| figrun-role: <role>`, beside `#| label:`. `setup` always runs, as a chunk that attaches packages does; `reload` loads a saved checkpoint and is run even under `eval: false`; `processing` rebuilds or reclusters the object and is skipped unless named with `--allow-expensive`; `figure` and `table` are the chunks you target. A declared role decides the chunk's class, except that a chunk calling a function on the expensive list in force is processing whatever it declares, and the run says so; an unknown role stops the run, naming the chunk and the roles. `--list` marks declared roles with `^`.
+
+A chunk without the option is classified by the calls it makes. Which calls count as "rebuilds the object" or "reloads the checkpoint" come from named presets; the one shipped, `cytof`, holds one lab's CyTOF idioms (CATALYST's `prepData`, `computeSpillmat`, `compCytof`, `cluster` and `runDR`, that lab's wrappers `prepData2`, `compCytof2`, `cluster2` and `runDR2`, `mergeClusters`, `read.flowSet`, `read.FCS` and `qs_save`; `qs_read` for the reload) and is on by default so that no guard weakens while notebooks move to roles. `presets: []` turns it off; `--explain` says which preset classed each chunk, and every run warns, naming the chunk, of a call a known preset guards that no list in force does. A name counts when the chunk calls it, with or without a namespace prefix, so `cluster(` and `CATALYST::cluster(` both do; the same word in a comment, in a string, as a column or argument, or inside a longer name such as `cluster_ids(` does not. `expensive_calls_extra` adds names to the list in force. `expensive_calls` and `reload_calls` replace the presets' lists, and when that leaves a preset's call out `figrun` says so in one line, before `--list` and at the start of a run, naming the calls that are no longer guarded.
+
+Figure and table chunks are recognised by their savers, `f2()` and `saveFig()` for figures and `saveTable()` for tables in R, `savefig()` and `savetable()` (or `figtracer.savefig()`) in Python, and the same names drive title scanning, `--awaiting`, `--changed`, the muting of figures in prerequisites and `figsync drift`'s list of figures awaiting a render. A compatible saver with another name is listed in `figure_savers` or `table_savers`, which replace the defaults: a list names R's savers, and a mapping `{r: [...], python: [...]}` names either language's. A notebook may set these keys and the call-list keys in a `figrun:` block of its own front matter, which wins over `config.yaml` key by key for that notebook, so a notebook written against its own package names its savers and processing calls itself ([docs/NOTEBOOKS.md](docs/NOTEBOOKS.md)). How R is launched is set in `config.yaml` only:
 
 ```yaml
 figrun:
   runner: Rscript                      # default: rlog if it is on PATH, else Rscript
+  presets: []                          # default [cytof]; [] turns the call lists off
   expensive_calls_extra: [saveRDS]     # added to the list in force
-  expensive_calls: [runPCA, RunUMAP, FindClusters]   # replaces the default list
-  reload_calls: [readRDS]
+  expensive_calls: [runPCA, RunUMAP, FindClusters]   # replaces the presets' list
+  reload_calls: [readRDS]              # replaces the presets' list
+  figure_savers: [f2, saveFig, savePanel]   # replaces the default list (R)
+  table_savers: {r: [saveTable], python: [savetable, save_summary]}   # per language
+  python: ~/venvs/lab/bin/python       # Python interpreter after --python and <exp>/.venv
 ```
 
 ## Numbers and tables
@@ -163,7 +175,7 @@ notecheck_ignore: [209]                       # single values that are not resul
 
 Inside a checked section, a paragraph that quotes an external source (an instrument's statistics, a figure made in another tool) goes between `<!-- notecheck:off -->` and `<!-- notecheck:on -->`. The markers work on their own lines or inside a sentence, and an `off` that is never closed runs to the end of the note. Numbers between them that the outputs do not contain are counted as suppressed in the summary line and listed under `suppressed` in `--json`, as the ones matched by `notecheck_ignore:` are, so the opt-out stays visible. The wet-lab template wraps the body of its Carry-forward subsection this way: it sits under Conclusions, and what is written there is bench values for the next run.
 
-The console corpus reads an append-only R session log in the format `seekit`'s `start_session_log()` writes, one block per run with a marker per chunk; `figrun` writes those markers, and a knit does too.
+The console corpus reads `session.log`, an append-only log in the format figtracer specifies in [docs/SESSION_LOG.md](docs/SESSION_LOG.md): one block per run, with a marker per chunk. `figrun` writes a block for every run it makes, R or Python. Interactive runs are recorded when the notebook calls a logger that writes the same format; that document lists the writers.
 
 ## Decks and Word documents
 
@@ -199,6 +211,18 @@ forwards to it for one release.
 console scripts; `figtracer` is a convenience front door over them. The
 [analysis doctor](docs/ANALYSIS_DOCTOR.md) gives humans, agents, and CI a named, suppressible
 checklist while keeping one detailed internal QMD as the source of truth.
+
+## Optional: seekit and other compatible producers
+
+figtracer defines the contracts, and any code that follows them can produce what figtracer reads. A saver with another name is listed in `figure_savers` or `table_savers` (above), writes the line [docs/MANIFEST.md](docs/MANIFEST.md) specifies, and records the notebook, chunk and outputs root as [docs/EXECUTION_CONTEXT.md](docs/EXECUTION_CONTEXT.md) describes; nothing in figtracer changes for it. A logger that writes the format of [docs/SESSION_LOG.md](docs/SESSION_LOG.md) records interactive runs for `slog` and `notecheck`.
+
+seekit, the Wing Lab's R package for single-cell and CyTOF analysis, is one such producer, and figtracer carries three optional pieces for notebooks written with it:
+
+- seekit's `f2()`, `saveFig()` and `saveTable()` write the same manifest lines, and its figure savers follow the same Arial policy. Under figrun they take the chunk from knitr's current label and the notebook from `get_this_rmd_file()`, both of which figrun sets. A notebook that calls seekit's `start_session_log()` continues figrun's run block through an adapter in figrun's R engine that is active only when the notebook loads seekit.
+- The analysis templates `seekit` (the lab's notebook setup, which loads seekit, CATALYST, SingleCellExperiment and qs2) and `cytof_clustering` (a CyTOF clustering analysis with its run plan) are chosen with `figtracer new --analysis-template <name>`, or for every new experiment with `analysis_template: seekit` in `~/.config/labkit/config.yaml`. Without either, `figtracer new` writes a generic notebook that needs only the installed saver and ggplot2.
+- figrun's call-list preset `cytof`, described under "Re-rendering from the notebook", classes chunks that call that lab's CyTOF processing functions as processing. It is on by default while notebooks move to declared roles, so that no processing guard weakens; `figrun: {presets: []}` turns it off.
+
+[`examples/cytof`](examples/cytof) runs the loop on two public CyTOF datasets, one analysed in R with `seekit` and one in Python with `scanpy`, and places figures from both in one lab note.
 
 ## When figtracer fits
 
@@ -241,9 +265,9 @@ The quick start installs the CLI with `uv tool`. Update it later with:
 uv tool upgrade figtracer
 ```
 
-For `from figtracer import savefig`, install the package into the environment that runs your
-Python analysis too. See the [five-minute guide](docs/GETTING_STARTED.md) for a local-clone
-example.
+For `from figtracer import savefig, savetable`, install the package into the environment that runs your Python analysis too; figrun runs Python chunks in that environment. See the [five-minute guide](docs/GETTING_STARTED.md) for a local-clone example.
+
+R needs no package from figtracer. A notebook sources the saver from the installed CLI with `source(system2("figtracer", "r-saver", stdout = TRUE))`; `figtracer r-saver` prints the file's path. The saver draws SVG with svglite and PNG with ragg.
 
 ## Development
 
@@ -262,7 +286,7 @@ pytest
 figtracer/      umbrella package (CLI, figsync, figrun, notecheck, sync, savefig, savetable, data, export)
 labkit/         experiment scaffolding + Mission Control + ingest (+ templates, config)
 figtools/       figure assembly, embed, and integrity checks
-r/              dependency-free R saveFig() shim
+r/              a copy of the R saver, saveFig() and saveTable() (figtracer r-saver prints the installed one's path)
 examples/       minimal zero-data demo snapshot + public-data CyTOF example
 docs/           five-minute start, optional full setup, and subsystem guides
 ```

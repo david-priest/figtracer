@@ -138,6 +138,11 @@ def test_embed_widths_and_code_are_not_scanned(tmp_path):
     body = "![[fig.png|720]] and `x <- 41` and [[link 33]]\n"
     findings, _ = check(tmp_path, body, corpus)
     assert findings == []
+    # The html embed figsync places by default: its width is not a result either.
+    body = ('<img src="attachments/EXP_umap_D1.png" width="720" alt="umap_D1">\n'
+            "Cells: 41.\n")
+    findings, _ = check(tmp_path, body, corpus)
+    assert [f["value"] for f in findings] == ["41"], findings
 
 
 # --- suppression ------------------------------------------------------------------
@@ -255,6 +260,40 @@ def test_a_note_can_declare_another_experiment_it_quotes(tmp_path, monkeypatch):
     r = notecheck.diagnose(exp="EXP-A")
     assert r["summary"]["unsourced"] == 0
     assert r["also"] == ["EXP-B"]
+
+
+def test_a_table_figsync_resolves_is_read_when_exports_dir_is_elsewhere(tmp_path, monkeypatch):
+    """A note written before the canonical tree can keep `exports_dir: <exp>/exports`
+    while saveTable() writes `<exp>/outputs/<title>.csv`. figsync finds that table from
+    data_dir and places it in the note, so notecheck must read the same file; reading
+    only exports_dir left every cell of the placed table unsourced."""
+    root = tmp_path / "EXP01"
+    (root / "data").mkdir(parents=True)
+    (root / "exports").mkdir()
+    (root / ".here").write_text("", encoding="utf-8")
+    out = root / "outputs"
+    out.mkdir()
+    (out / "arm_counts.csv").write_text("arm,n,pct\ntreated,1200,61.25\ncontrol,980,58.40\n",
+                                        encoding="utf-8")
+    (out / "MANIFEST.jsonl").write_text(json.dumps({
+        "kind": "table", "title": "arm_counts", "fig": "arm_counts.csv",
+        "rel_path": "arm_counts.csv", "channel": "note",
+        "saved_at": "2026-01-02T03:04:05+0900"}) + "\n", encoding="utf-8")
+    note = root / "EXP01.md"
+    note.write_text("| treated | 1200 | 61.25 |\n| control | 980 | 58.40 |\n", encoding="utf-8")
+    monkeypatch.setattr(notecheck, "_experiment", lambda exp=None, cwd=None: {
+        "experiment_id": "EXP01", "exports_dir": str(root / "exports"),
+        "data_dir": str(root / "data"), "_note": str(note)})
+
+    r = notecheck.diagnose(exp="EXP01")
+    assert "arm_counts.csv" in r["corpus"]["sources"]
+    assert r["summary"]["unsourced"] == 0
+
+
+def test_a_table_already_at_the_root_is_read_once(tmp_path):
+    out, _ = _exp(tmp_path, {"t.csv": "v\n48\n"})
+    corpus = notecheck.build_corpus(out, None, tables=[os.path.join(out, "t.csv")])
+    assert corpus.sources.count("t.csv") == 1
 
 
 def test_a_tables_row_count_is_itself_a_source(tmp_path):
@@ -950,14 +989,18 @@ def test_the_report_states_the_scope_and_counts_what_a_block_suppressed(tmp_path
     assert "1 unsourced, 1 suppressed" in printed
 
 
-def _scaffolded(tmp_path, edit):
-    """A wet-lab note scaffolded from the shipped template, with `edit(text)` applied to it."""
+def _scaffolded(tmp_path, edit, template="wetlab_experiment", context=None):
+    """A note scaffolded from a shipped template (the wet-lab one unless named), with
+    `edit(text)` applied to it."""
     from labkit import scaffold
+    project = {"vault_dir": "Experiments", "data_root": str(tmp_path / "data"),
+               "default_platform": "CyTOF", "template": template,
+               "dashboard": "DEMO/Mission Control.md"}
+    if context is not None:
+        project["context"] = context
     cfg = {"vault_root": str(tmp_path / "vault"),
            "templates_dir": os.path.join(os.path.dirname(scaffold.__file__), "templates"),
-           "projects": {"DEMO": {"vault_dir": "Experiments", "data_root": str(tmp_path / "data"),
-                                 "default_platform": "CyTOF", "template": "wetlab_experiment",
-                                 "dashboard": "DEMO/Mission Control.md"}}}
+           "projects": {"DEMO": project}}
     note = scaffold.new("DEMO", "A synthetic assay", cfg=cfg, stamp="2026-09-07", exp_id="EXP1")["note"]
     with open(note, encoding="utf-8") as fh:
         text = fh.read()
@@ -1007,3 +1050,26 @@ def test_carry_forward_in_a_scaffolded_note_is_exempt_and_conclusions_is_not(tmp
     assert [f["value"] for f in findings] == ["37"]
     assert {"300", "5", "55"} <= {s["value"] for s in suppressed}
     assert {s["suppression"] for s in suppressed} == {"notecheck:off block in the note"}
+
+
+def test_a_scaffolded_benchmark_note_does_not_check_its_project_context(tmp_path):
+    """The project context comes from projects.yaml and holds no result of this experiment:
+    on 2026-10-22 it was what notecheck flagged in a new benchmark note. The scope is
+    Results and Conclusions, as the wet-lab template's is Analysis and Conclusions: the
+    design sections above them hold dataset sizes and parameters, and the template's own
+    Datasets placeholder ("Tier-1", "Tier-2") would be flagged in a fresh note."""
+    from labkit import config as lkconfig
+    context = "Five public datasets of 24 to 40 markers, 2 of them from 2019."
+    claim = "_Headline findings per axis. What won, where our fix helps, where it doesn't._"
+    design = "_The method roster + parameterisation. What each contributes; which take a fixed k vs auto-detect._"
+
+    def edit(text):
+        assert context in text and claim in text and design in text
+        text = text.replace(design, "Four methods at k = 30, 10,000 cells per run.")
+        return text.replace(claim, "Method B scored 0.82 against 0.74 for method A.")
+
+    note = _scaffolded(tmp_path, edit, template="methods_benchmark", context=context)
+    assert lkconfig.read_frontmatter(note)["notecheck_sections"] == ["Results", "Conclusions"]
+    findings, _ = notecheck.check_note(note, notecheck.Corpus())
+    assert {f["value"] for f in findings} == {"0.82", "0.74"}
+    assert not [f for f in findings if f["check"] == "missing-section"]

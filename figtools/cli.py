@@ -74,6 +74,20 @@ def build_parser() -> argparse.ArgumentParser:
     pt.add_argument("pdf", nargs="?")
     pt.add_argument("--r-helper", action="store_true", help="print the bundled R exporter path")
 
+    ps = sub.add_parser("superscript",
+                        help="superscript the +/- of marker names (PD1+, CD45RA-) inside each "
+                             "text object of a VectorCraft document")
+    ps.add_argument("figure", help=".vectorcraft document, or a PDF/SVG to convert to one first")
+    ps.add_argument("-o", "--out", help="output .vectorcraft (default <stem>.superscript.vectorcraft "
+                                        "alongside); never the input")
+    ps.add_argument("--apply", action="store_true",
+                    help="write OUT; without it the signs are listed and nothing is written")
+    ps.add_argument("--keep-hyphens", action="store_true",
+                    help="superscript a hyphen sign as it is (default: make it a minus, U+2212)")
+    ps.add_argument("--accept-missing-glyphs", action="store_true",
+                    help="write OUT even where a character is not in its font and VectorCraft "
+                         "draws it in a fallback font (default: refuse, naming the characters)")
+
     po = sub.add_parser("optimise",
                         help="shrink a figure PDF/.ai by downsampling embedded rasters (vector preserved)")
     po.add_argument("input", help="a .pdf / PDF-compatible .ai, or a directory of them")
@@ -158,6 +172,9 @@ def main(argv=None) -> int:
     if args.cmd == "typography":
         from . import typography
         return typography.run(args)
+    if args.cmd == "superscript":
+        from . import superscript
+        return superscript.run(args)
     if args.cmd == "verify":
         from . import verify
         return verify.run(args)

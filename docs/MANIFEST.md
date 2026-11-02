@@ -2,7 +2,7 @@
 
 One file per experiment, at `outputs/MANIFEST.jsonl`, one JSON object per line, append-only. Every artefact a notebook saves for a note gets a line here, and every figtracer command that resolves an artefact by title reads this file and nothing else. The file is committed; the renders beside it are not.
 
-Six writers produce it: seekit's `f2()`, `saveFig()` and `saveTable()`; the bundled R shim (`r/figtracer.R`); `figtracer.savefig` and `figtracer.savetable` in Python; and `figtracer fig register` for a file made elsewhere. Three readers consume it: `figsync`, `figrun` and `fig doctor`. `figtracer/manifest.py` is where the readers' shared behaviour lives.
+figtracer owns this contract, and any saver that follows it is a writer. figtracer's own writers are the bundled R saver (`saveFig()`, `saveTable()` and the alias `f2()` in `figtracer/resources/figtracer.R`, whose installed path `figtracer r-saver` prints; `r/figtracer.R` is a copy), `figtracer.savefig` and `figtracer.savetable` in Python, and `figtracer fig register` for a file made elsewhere. A compatible package's savers write the same lines; seekit's `f2()`, `saveFig()` and `saveTable()` are one example. Three readers consume it: `figsync`, `figrun` and `fig doctor`. `figtracer/manifest.py` is where the readers' shared behaviour lives. How a writer learns the notebook, the chunk and the `outputs/` root it records is specified in [EXECUTION_CONTEXT.md](EXECUTION_CONTEXT.md).
 
 ## Fields
 
@@ -13,12 +13,12 @@ Six writers produce it: seekit's `f2()`, `saveFig()` and `saveTable()`; the bund
 | `rel_path` | yes | path of the artefact relative to `outputs/`. A figure sits in a dated subfolder (`2026-09-14_<notebook>/<stamp>_<title>.pdf`); a table sits at the root (`<title>.csv`) and is overwritten in place; a deck or document is the one kind whose path climbs out of `outputs/` (`../deck/<file>.pptx`, `../manuscript/<file>.docx`), because it lives beside its generator or with its authors. Every reader resolves the path with `manifest.artefact_path()` |
 | `fig` | yes | historical duplicate of `rel_path`; readers fall back to it |
 | `channel` | no | `note` (default) for a lab-note artefact; `panel` for a figtools panel export. A panel can never shadow a note figure of the same title |
-| `embed` | no | `true` marks it for `figsync` to place and sync |
+| `embed` | no | `true` marks it for `figsync` to place and sync. A reader takes an entry without it as the default of the savers of its kind: `false` for a figure, `true` for a table (`manifest.embedded()`) |
 | `fig_format` | no | `pdf`, `svg`, `png`, `csv` |
 | `saved_at` | yes | when it was written; see the note on spellings |
 | `timestamp` | yes | the `%Y-%m-%d_%H.%M.%S` stamp in the filename |
-| `qmd_path` | no | the notebook that wrote it, absolute |
-| `chunk_label` | no | the chunk that wrote it; `null` from an interactive session, set by `figrun` and by a knit |
+| `qmd_path` | under figrun | the notebook that wrote it, absolute; from the saver's argument, `FIGTRACER_NOTEBOOK` or discovery (EXECUTION_CONTEXT.md); `null` from a console or a script |
+| `chunk_label` | under figrun | the chunk that wrote it; from the saver's argument, `FIGTRACER_CHUNK` or knitr; `null` from an interactive session |
 | `git_commit`, `git_branch` | no | the notebook repository at the moment of writing |
 | `width_in`, `height_in` | figures | size in inches |
 | `n_rows`, `n_cols`, `columns` | tables | shape, so a note can say what it embeds |
@@ -41,7 +41,9 @@ R writes `2026-09-14T10:22:31+0900`; Python writes `2026-09-14T10:22:31.482115`;
 ## What a reader may assume
 
 - A title resolves to its newest entry whose file exists on disk; older entries are history and `figsync prune` may have removed their files.
+- A title with entries but no file on disk may have been retired by `figsync prune --title`; `outputs/RETIRED.tsv` (`retired_at`, `title`, `files`, `reason`) says when and why. Retiring writes no MANIFEST line.
 - An entry with no `kind` is a figure.
 - A `deck` or `document` entry is never pruned, never a panel, and never a figure to `fig doctor`; its `rel_path` may begin with `..`.
+- A `table` entry, or any entry whose file is a CSV at the root of `outputs/`, is never pruned, also when a figure shares its title.
 - A malformed line is skipped, never fatal.
 - Nothing rewrites or deletes a line. History lives in the file and in git.

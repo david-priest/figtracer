@@ -51,7 +51,7 @@ for t in TYPES:
 ax.set(xticks=[], yticks=[], title="HIV — UMAP by cell type")
 ax.legend(markerscale=5, fontsize=6, ncol=1, loc="center left", bbox_to_anchor=(1, .5), frameon=False)
 fig.tight_layout()
-savefig(fig, title="hiv_umap_celltype", format="png", outputs=OUT)
+savefig(fig, title="hiv_umap_celltype", format="png", embed=True, outputs=OUT)
 plt.close(fig)
 
 # %%
@@ -67,7 +67,7 @@ ax.set(xticks=range(len(med.columns)), yticks=range(len(TYPES)),
 plt.setp(ax.get_xticklabels(), rotation=90, fontsize=7)
 fig.colorbar(im, ax=ax, shrink=.7)
 fig.tight_layout()
-savefig(fig, title="hiv_marker_heatmap", format="png", outputs=OUT)
+savefig(fig, title="hiv_marker_heatmap", format="png", embed=True, outputs=OUT)
 plt.close(fig)
 
 # %%
@@ -84,7 +84,7 @@ for t in TYPES:
 ax.set(xticks=range(len(ab)), ylabel="fraction of cells", title="HIV — composition by timepoint")
 ax.set_xticklabels(list(ab.index), rotation=45, ha="right", fontsize=7)
 fig.tight_layout()
-savefig(fig, title="hiv_abundance_by_timepoint", format="png", outputs=OUT)
+savefig(fig, title="hiv_abundance_by_timepoint", format="png", embed=True, outputs=OUT)
 plt.close(fig)
 
 print("wrote 3 figures + MANIFEST lines to", OUT)

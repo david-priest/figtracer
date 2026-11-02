@@ -23,9 +23,7 @@ pip install -e ".[dev]"     # runtime + test deps
 pytest                       # run the test suite
 ```
 
-The optional R helper (`r/figtracer.R`) is a standalone, base-R `f2()` shim so R users get
-the same figure→manifest→note loop without any extra R package; it is sourced directly, not
-installed.
+The R saver (`saveFig()`, `saveTable()` and the alias `f2()`) gives R users the same figure→manifest→note loop without an R package from figtracer. It ships inside the Python package as `figtracer/resources/figtracer.R`, of which `r/figtracer.R` is a copy, and a notebook sources the installed file with `source(system2("figtracer", "r-saver", stdout = TRUE))`.
 
 ## Pull requests
 

@@ -21,9 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "PROJECT-YYYY-MM-DD-A. For projects that number their runs by hand.")
     pn.add_argument("--analysis-template", metavar="NAME",
                     help="start the analysis notebook from a shipped template instead of the "
-                         "three-chunk stub. `cytof_clustering` writes the CyTOF clustering "
+                         "generic stub. `cytof_clustering` writes the CyTOF clustering "
                          "notebook (build, compensate, cluster, embed, merge from the canvas) "
-                         "and its run plan, analysis/<id>.runplan.json. Not with --data-dir.")
+                         "and its run plan, analysis/<id>.runplan.json; `seekit` writes the "
+                         "Wing Lab setup (seekit, CATALYST). Without it, `analysis_template` in "
+                         "the user config, if set. Not with --data-dir.")
     pn.add_argument("--stamp", help="override date (YYYY-MM-DD) for reproducible tests")
     pn.add_argument("--data-dir", help="backfill: point at an existing run folder + ingest its "
                                        "panel/sample sheets (instead of scaffolding fresh folders)")
