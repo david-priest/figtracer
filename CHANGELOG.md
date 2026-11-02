@@ -6,6 +6,14 @@ All notable changes to figtracer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-11-03
+
+### Changed
+
+- The README's DOI badge and `CITATION.cff` cite the Zenodo DOI that resolves to the newest version (`10.5281/zenodo.21288979`) instead of the record of v0.1.0.
+- `docs/ABUNDANCE_INTERP.md` and `docs/MERGE_CANVAS.md`, which described one lab's analysis workflow for coding agents rather than figtracer, are no longer published.
+- Example values and names in the documentation, a code comment and three tests are replaced with invented ones.
+
 ## [0.5.0] — 2026-11-03
 
 ### Added
@@ -509,7 +517,8 @@ one installable package with three console scripts (`figtracer`, `labkit`, `figt
 - Cross-language front-ends (R and Python) writing the same manifest contract.
 - MIT license; packaging metadata; CI (pytest on Python 3.11 / 3.12 / 3.13).
 
-[Unreleased]: https://github.com/david-priest/figtracer/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/david-priest/figtracer/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/david-priest/figtracer/releases/tag/v0.5.1
 [0.5.0]: https://github.com/david-priest/figtracer/releases/tag/v0.5.0
 [0.4.0]: https://github.com/david-priest/figtracer/releases/tag/v0.4.0
 [0.3.0]: https://github.com/david-priest/figtracer/releases/tag/v0.3.0
