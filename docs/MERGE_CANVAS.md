@@ -22,8 +22,8 @@ This is an optional workflow for CyTOF clustering notebooks. figtracer's part is
 2. **The `%` column is the POOLED per-cluster % shown on the heatmap** (`perc=TRUE`
    / the `n_cells` bars = `prop.table(table(cluster_id))*100`), **NOT** the
    mean-of-per-sample `Freq` from the `*_abundance_*_data.xlsx`. Those two differ a
-   lot for sample-skewed clusters (real case: CD8 cluster 4 → pooled 13.35% vs
-   sample-mean 6.21%). The table sits beside the heatmap, so its % must match the
+   lot for sample-skewed clusters (a cluster can read about 13 % pooled and
+   6 % as the sample mean). The table sits beside the heatmap, so its % must match the
    heatmap's labels. If you can't compute pooled % from data on disk (no SCE /
    no per-cluster counts), **transcribe the values off the canonical heatmap
    figure** — it is the source of truth — rather than substituting the sample mean.
