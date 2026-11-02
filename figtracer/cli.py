@@ -10,6 +10,8 @@
   vault <sub>            -> figtracer.vault      (whole-vault health checks)
   notecheck              -> figtracer.notecheck  (numbers in notes exist in outputs)
   slog                   -> figtracer.slog       (the CURRENT run of a session.log)
+  repos                  -> figtracer.repos      (read-only health check of ~/code repos)
+  r-saver                -> figtracer.resources  (path of the installed R saver)
 
 It deliberately stays a dispatcher: each sub-tool owns its own argument parsing, so the
 machinery has one entry point without re-implementing anything. The old `labkit`/`figtools`
@@ -33,7 +35,7 @@ usage: figtracer <command> [args]
     init          write the per-machine user config
 
   figures (figtools)
-    fig <sub>     register | inspect | normalize | assemble | check | render | rasterise | verify | embed | watch | optimise | doctor
+    fig <sub>     register | inspect | normalize | assemble | check | render | rasterise | superscript | verify | embed | watch | optimise | doctor
 
   protocols (moved to protokit, 2026-09-02)
     protocol      forwards to `protokit` when it is installed
@@ -47,6 +49,7 @@ usage: figtracer <command> [args]
     figrun        render a qmd's figure chunks headlessly (--list | --changed | --awaiting)
     slog          the CURRENT run of an append-only session.log (a chunk, --history, --runs,
                   --errors, --notebook)
+    r-saver       path of the installed R saver (saveFig, saveTable, f2), to source() it
 
   decks and Word documents (provenanced like the note)
     deck <sub>    inspect | record | check — a deck built with figtracer.deck.DeckBuild
@@ -55,6 +58,10 @@ usage: figtracer <command> [args]
   whole-vault health
     vault lint    broken links, ambiguous filenames, orphaned attachments (read-only)
     notecheck     every number in a note exists in the experiment's outputs (read-only)
+
+  code repositories
+    repos         uncommitted or unpushed work, worktrees to retire, old PRs, a missing
+                  core.hooksPath, the live checkout (read-only; exit 1 on a finding)
 
   close the loop
     sync          end-of-session roundup: figures -> note -> Mission Control -> commit
@@ -72,10 +79,21 @@ Run `figtracer <command> -h` for command-specific help.
 """
 
 
+def _usage() -> str:
+    """USAGE, plus the manuscript command where this tree carries it: it is held out of the
+    public snapshot (dev/public-excludes.txt), and a command that cannot import is not listed."""
+    import importlib.util
+    if importlib.util.find_spec("figtracer.manuscript") is None:
+        return USAGE
+    anchor = "a Word document, or any hand-made deck\n"
+    return USAGE.replace(anchor, anchor + "    manuscript <sub>  text | stale | version | map | callouts | handoff | check | figrun — a paper's text "
+                         "against its figures and its versions\n", 1)
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help"):
-        print(USAGE)
+        print(_usage())
         return 0
 
     cmd, rest = argv[0], argv[1:]
@@ -122,6 +140,12 @@ def main(argv=None) -> int:
             return document.main(["-h"])
         return document.main(rest)
 
+    if cmd == "manuscript":
+        from figtracer import manuscript
+        if not rest or rest[0] in ("-h", "--help"):
+            return manuscript.main(["-h"])
+        return manuscript.main(rest)
+
     if cmd == "vault":
         from figtracer import vault
         if not rest or rest[0] in ("-h", "--help"):
@@ -135,6 +159,14 @@ def main(argv=None) -> int:
     if cmd == "slog":
         from figtracer import slog
         return slog.main(rest)
+
+    if cmd == "repos":
+        from figtracer import repos
+        return repos.main(rest)
+
+    if cmd == "r-saver":
+        from figtracer import resources
+        return resources.main(rest)
 
     if cmd == "export":
         from figtracer import export
@@ -157,7 +189,7 @@ def main(argv=None) -> int:
         return analysis_doctor.main(rest)
 
     print(f"figtracer: unknown command '{cmd}'\n", file=sys.stderr)
-    print(USAGE)
+    print(_usage())
     return 2
 
 

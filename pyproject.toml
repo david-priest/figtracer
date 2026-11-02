@@ -1,7 +1,7 @@
 [project]
 name = "figtracer"
-version = "0.4.0"
-description = "Keep the figures in a Markdown lab note in step with the R or Python code that made them, with a manifest per figure save and a sync per note; optional experiment scaffolding, headless figure re-rendering and a project dashboard on top."
+version = "0.5.0"
+description = "Keep the figures and tables in Markdown lab notes in step with the R or Python notebook chunks that made them: a manifest records each save with its notebook and chunk, figrun re-runs labelled chunks headlessly, and notecheck checks the numbers in a note against the saved outputs."
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{name = "David G. Priest"}]
@@ -11,7 +11,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 # Union of the three former packages' deps so the whole toolchain installs from one wheel.
-dependencies = ["PyYAML>=6", "openpyxl>=3", "lxml>=5", "Pillow>=10", "pypdf>=5"]
+dependencies = ["PyYAML>=6", "openpyxl>=3", "lxml>=5", "Pillow>=10", "pypdf>=5", "fonttools>=4.40"]
 
 [project.urls]
 Homepage = "https://github.com/david-priest/figtracer"

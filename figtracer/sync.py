@@ -326,6 +326,7 @@ def main(argv=None) -> int:
     print(f"  data_dir   : {data_dir}")
 
     figures_done: list[str] = []
+    placement_left = 0
 
     # 1 — figures
     _step(1, "Figures")
@@ -387,8 +388,16 @@ def main(argv=None) -> int:
             if res["missing"]:
                 print(f"      ! figsync: {len(res['missing'])} flagged figure(s) not yet rendered "
                       f"(re-run chunks): {', '.join(res['missing'])}")
-            if res["unplaced"]:
-                print(f"      · figsync: {len(res['unplaced'])} embed=TRUE figure(s) not placed in a note")
+            # The notes against the renders, after the writes above (figsync.placement_status):
+            # what is left is what sync cannot do itself, which is placing a title. A dry run
+            # has written nothing, so its STALE titles are the ones -y writes, listed above.
+            pst = figsync.placement_status(figs, eid, fs_notes, fs_attach, tables)
+            if not execute:
+                pst.update(stale=[], stale_tables=[], not_materialised=[])
+            placement_left = figsync.placement_blocking(pst)
+            for line in figsync.placement_lines(pst, eid, os.path.basename(note)):
+                for sub in line.split("\n"):
+                    print(f"      {sub}" if sub else "")
             if args.no_documents:
                 _do(execute, "documents: skipped (--no-documents)")
             elif dres is not None:
@@ -552,6 +561,14 @@ def main(argv=None) -> int:
         print("  Dry run complete. Re-run with -y / --yes to apply.\n")
     else:
         print("  Sync complete.\n")
+    if placement_left:
+        # Not a reason to hold the commit, as unsourced numbers are: a figure missing from
+        # the note puts nothing false on record. It is a reason not to read this as done.
+        from figtracer import figsync
+        sys.stdout.flush()
+        print(f"  ! {placement_left} figure(s)/table(s) not shown in the notes (step 1) — "
+              f"exit {figsync.PLACEMENT_EXIT}\n", file=sys.stderr)
+        return figsync.PLACEMENT_EXIT
     return 0
 
 

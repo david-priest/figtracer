@@ -6,6 +6,8 @@ proportions table — do not eyeball the boxplot / stacked-bar image.** The pict
 shows you *that* something differs; the numbers tell you *what*, *how much*, and
 whether it's real or an artefact of composition.
 
+This is an optional workflow for CyTOF clustering notebooks written with the seekit package: the plotting functions and the `saveExcel` option below are seekit's, not figtracer's.
+
 ## Where the numbers are
 
 Abundance figures come from `plotAbundancesSorted()` / `plotAbundanceStacked()`.

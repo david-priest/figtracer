@@ -26,7 +26,9 @@ in the qmd; see the analysis spec.
 overwritten in place each run, so they are current by construction. The dated
 `outputs/<date>_<qmd>/` subfolders accumulate and are historical — including them
 would let a stale number match and pass, which is the exact failure this exists to
-prevent.
+prevent. The CSVs read are those at the root of the note's `exports_dir` and, for each
+table, the file figsync resolves from `data_dir`: the two folders differ on an experiment
+whose note predates the canonical tree, and figsync is what put the table in the note.
 
 **`session.log` is current PER CHUNK, not per run.** The first version took the newest
 run block only, on the assumption that a run is the whole notebook. Under the house
@@ -212,6 +214,10 @@ def _strip_note(text: str, include_log: bool = False) -> str:
     text = re.sub(r"```.*?```", _blank, text, flags=re.S)           # code fences
     text = re.sub(r"`[^`\n]*`", "", text)                          # inline code
     text = re.sub(r"!\[\[[^\]]*\]\]", "", text)                     # embeds (|720 widths)
+    # The html embed figsync writes (`link_style: html`, its default): its width="720" is
+    # not a result. Only the Obsidian form was stripped, and once `figsync place --after`
+    # put embeds in a checked section every html embed's width was reported unsourced.
+    text = re.sub(r"<img\b[^>\n]*>", "", text)
     text = re.sub(r"\[\[[^\]]*\]\]", "", text)                      # wikilinks
     text = re.sub(r"\]\([^)]*\)", "]", text)                        # md link targets
     # The line figsync writes under a placed table cut at its row limit: its count is of rows
@@ -476,8 +482,13 @@ def _ledgers(outputs_dir: str) -> list[str]:
 
 def build_corpus(outputs_dir: str, session_log: str | None, corpus: Corpus | None = None,
                  qmd_labels: set[str] | None = None,
-                 notebook_labels: dict[str, set[str]] | None = None) -> Corpus:
+                 notebook_labels: dict[str, set[str]] | None = None,
+                 tables: list[str] | None = None) -> Corpus:
     """Root-level CSVs, the protocol and run ledgers, and session.log current PER CHUNK.
+
+    `tables`, when given, are further CSVs read like the root-level ones: the current file
+    of each table figsync resolves (`_table_csvs`). A path already among the root-level
+    CSVs is read once.
 
     `qmd_labels`, when given, is the set of chunk labels the notebook still has: a chunk
     that ran once and was since deleted has no current output, so its values are history.
@@ -496,7 +507,13 @@ def build_corpus(outputs_dir: str, session_log: str | None, corpus: Corpus | Non
             c.add_text(fh.read(), name)
     # Root level ONLY. os.walk here would pull in the dated render folders, whose
     # values are by definition from previous runs.
-    for p in sorted(glob.glob(os.path.join(outputs_dir, "*.csv"))):
+    paths = sorted(glob.glob(os.path.join(outputs_dir, "*.csv")))
+    seen = {os.path.realpath(p) for p in paths}
+    for p in tables or []:
+        if os.path.realpath(p) not in seen:
+            seen.add(os.path.realpath(p))
+            paths.append(p)
+    for p in paths:
         name = os.path.basename(p)
         c.sources.append(name)
         n_rows = 0
@@ -731,6 +748,26 @@ def _paths(fm: dict) -> tuple[str, str | None, str]:
     return outputs, (log if os.path.isfile(log) else None), os.path.dirname(fm["_note"])
 
 
+def _table_csvs(fm: dict) -> list[str]:
+    """The current CSV of every table `figsync place --table` can put in this experiment's notes.
+
+    figsync resolves tables from `data_dir`, walking up to the experiment's
+    outputs/MANIFEST.jsonl, while `_paths` reads `exports_dir` from the frontmatter. An
+    experiment whose note predates the canonical tree can carry an `exports_dir` that
+    saveTable() never writes to (an `exports/` beside `outputs/`); without these paths
+    every cell of a table figsync placed in its note would be unsourced.
+    """
+    dd = fm.get("data_dir")
+    if not dd:
+        return []
+    dd = os.path.abspath(os.path.expanduser(str(dd)))
+    if not os.path.isdir(dd):
+        return []
+    from figtracer.figsync import resolve_tables
+    return sorted(e["_path"] for e in resolve_tables(dd, channel=None).values()
+                  if not e["_missing"] and e["_path"].lower().endswith(".csv"))
+
+
 def _project(name: str) -> tuple[str, str]:
     """(project key, its outputs dir) from projects.yaml. A project has no notebook and no
     session.log; its corpus is its own root CSVs plus whatever `--also` adds, and what it
@@ -866,7 +903,8 @@ def diagnose(exp: str | None = None, also: list[str] | None = None,
         outputs, log, note_dir = _paths(fm)
 
     corpus = build_corpus(outputs, log, qmd_labels=_qmd_labels(fm) if fm else None,
-                          notebook_labels=_notebook_labels(fm) if fm else None)
+                          notebook_labels=_notebook_labels(fm) if fm else None,
+                          tables=_table_csvs(fm) if fm else None)
 
     # A note that legitimately quotes another experiment's numbers should SAY SO,
     # not have those numbers added to an ignore list. An ignore list makes a real
@@ -883,7 +921,7 @@ def diagnose(exp: str | None = None, also: list[str] | None = None,
             continue
         oout, olog, _ = _paths(ofm)
         build_corpus(oout, olog, corpus, qmd_labels=_qmd_labels(ofm),
-                     notebook_labels=_notebook_labels(ofm))
+                     notebook_labels=_notebook_labels(ofm), tables=_table_csvs(ofm))
         extra.append(oid)
 
     findings, suppressed, documents = [], [], []
@@ -972,12 +1010,12 @@ def where(exp: str | None, value: str, also: list[str] | None = None) -> dict:
     fm = _experiment(exp)
     outputs, log, _ = _paths(fm)
     corpus = build_corpus(outputs, log, qmd_labels=_qmd_labels(fm),
-                          notebook_labels=_notebook_labels(fm))
+                          notebook_labels=_notebook_labels(fm), tables=_table_csvs(fm))
     for other in also or []:
         ofm = _experiment(other)
         oout, olog, _ = _paths(ofm)
         build_corpus(oout, olog, corpus, qmd_labels=_qmd_labels(ofm),
-                     notebook_labels=_notebook_labels(ofm))
+                     notebook_labels=_notebook_labels(ofm), tables=_table_csvs(ofm))
     tok = normalise(value.strip())
     is_pct = tok.endswith("%")
     tok = tok.rstrip("%")

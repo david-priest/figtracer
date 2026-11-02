@@ -12,20 +12,30 @@ library** — the user brings their own.
     from figtracer import savefig
     import matplotlib.pyplot as plt
     plt.scatter(x, y)
-    savefig(plt.gcf(), title="umap_level1")          # -> outputs/<date>_<nb>/…svg + MANIFEST line
+    savefig(plt.gcf(), title="umap_level1", embed=True)   # -> outputs/<date>_<nb>/…svg + MANIFEST line
 
-Provenance captured: git commit/branch, notebook path (best-effort via `ipynbname` if
-installed, else pass `notebook=`), timestamp, size. Jupyter has no chunk label, so `title`
-is the stable key — set it explicitly.
+`embed=True` marks a figure for a note (`figsync place`, `sync`, `drift`); it defaults to
+False, as R's `saveFig()` and `f2()` do. `savetable()` defaults to True.
+
+Provenance captured: git commit/branch, notebook path and chunk label, timestamp, size.
+The notebook, chunk and outputs root come from `notebook=` / `chunk=` / `outputs=`, then
+the execution context (`FIGTRACER_NOTEBOOK`, `FIGTRACER_CHUNK`, `FIGTRACER_OUTPUTS`,
+docs/EXECUTION_CONTEXT.md), then `ipynbname` for the notebook if it is installed; with no
+outputs root, the `outputs/` of the first folder at or above the notebook (else the working
+directory) holding `.here`, an `*.Rproj` file or `.git`. A save with no `title` takes the
+chunk, else "figure"; Jupyter has no chunk label, so set `title` there.
 """
 from __future__ import annotations
 
 import datetime
+import glob
 import json
 import os
 import re
 import subprocess
 import sys
+
+from figtracer import context
 
 MANIFEST_NAME = "MANIFEST.jsonl"
 _UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -43,6 +53,27 @@ def _git(args: list[str], cwd: str) -> str | None:
 
 def _repo_root(start: str) -> str:
     return _git(["rev-parse", "--show-toplevel"], start) or start
+
+
+def _default_outputs(notebook: str | None) -> str:
+    """The outputs root when neither `outputs=` nor `FIGTRACER_OUTPUTS` gives one.
+
+    Walks up from the notebook's folder (else the working directory), the start included,
+    to the first folder holding `.here`, an `*.Rproj` file or `.git`, checked in that order,
+    and takes its `outputs/`: the folder `here::here()` finds for a scaffolded experiment.
+    It stops at the first marker, so an experiment inside a parent repository is its own
+    root. With no marker on the way up, `<cwd>/outputs`.
+    """
+    d = os.path.dirname(os.path.abspath(notebook)) if notebook else os.getcwd()
+    while True:
+        if (os.path.exists(os.path.join(d, ".here"))
+                or glob.glob(os.path.join(glob.escape(d), "*.Rproj"))
+                or os.path.exists(os.path.join(d, ".git"))):
+            return os.path.join(d, "outputs")
+        parent = os.path.dirname(d)
+        if parent == d:                                  # filesystem root, no marker
+            return os.path.join(os.getcwd(), "outputs")
+        d = parent
 
 
 def _notebook_path() -> str | None:
@@ -116,19 +147,28 @@ def _figure_filename(folder: str, timestamp: str, title: str, fmt: str) -> str:
     return candidate
 
 
-def savefig(fig=None, title: str = "figure", *, w: float | None = None, h: float | None = None,
-            format: str = "svg", embed: bool = True, channel: str = "note",
-            outputs: str | None = None, dpi: int = 300, notebook: str | None = None) -> dict:
+def savefig(fig=None, title: str | None = None, *, w: float | None = None, h: float | None = None,
+            format: str = "svg", embed: bool = False, channel: str = "note",
+            outputs: str | None = None, dpi: int = 300, notebook: str | None = None,
+            chunk: str | None = None) -> dict:
     """Save `fig` and append a `MANIFEST.jsonl` provenance line for the figtracer pipeline.
 
-    Args mirror R `f2()`. `title` is the stable key `figtracer fig embed` / `figsync` resolve —
-    set it explicitly (there is no notebook-cell equivalent of a knitr chunk label). Figures
-    land in ``<outputs>/<YYYY-MM-DD>_<notebook>/`` with the MANIFEST at ``<outputs>/``.
+    Args mirror R `f2()`. `title` is the stable key `figtracer fig embed` / `figsync` resolve;
+    without one it is the chunk, else "figure", as in R `saveFig()`. A Jupyter cell has no
+    chunk label, so set it explicitly there. Figures land in
+    ``<outputs>/<YYYY-MM-DD>_<notebook>/`` with the MANIFEST at ``<outputs>/``.
+    `embed=True` marks it for a note; the default is False, as in R `saveFig()`.
+    `notebook`, `chunk` and `outputs` default to the execution context, and `outputs` then to
+    the experiment root found by `_default_outputs()`; under `FIGTRACER_RUN` a save with no
+    notebook or chunk raises RuntimeError and writes nothing.
 
     Returns the record dict that was written.
     """
-    nb = notebook or _notebook_path()
-    outputs = outputs or os.path.join(_repo_root(os.getcwd()), "outputs")
+    nb = notebook or context.get(context.NOTEBOOK) or _notebook_path()
+    chunk = chunk or context.get(context.CHUNK)
+    context.require("savefig", nb, chunk)
+    title = title or chunk or "figure"
+    outputs = outputs or context.get(context.OUTPUTS) or _default_outputs(nb)
     nb_stem = os.path.splitext(os.path.basename(nb))[0] if nb else "session"
     day = datetime.date.today().isoformat()
     subdir = f"{day}_{nb_stem}"
@@ -148,7 +188,7 @@ def savefig(fig=None, title: str = "figure", *, w: float | None = None, h: float
         "embed": bool(embed), "fig_format": format,
         "width_in": width_in, "height_in": height_in,
         "timestamp": ts, "saved_at": datetime.datetime.now().isoformat(),
-        "qmd_path": nb, "chunk_label": None,
+        "qmd_path": nb, "chunk_label": chunk,
         "git_commit": (_git(["rev-parse", "HEAD"], outputs) or "")[:12] or None,
         "git_branch": _git(["rev-parse", "--abbrev-ref", "HEAD"], outputs),
         "py_version": f"{sys.version_info.major}.{sys.version_info.minor}",

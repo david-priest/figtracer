@@ -9,6 +9,7 @@ data_dir: "{{data_dir}}"
 analysis_qmd: "{{analysis_qmd}}"
 exports_dir: "{{exports_dir}}"
 runs: 0                     # acquisitions under runs/ — `figtracer run sync` maintains this
+notecheck_sections: [Results, Conclusions]   # notecheck checks numbers under these headings only; the project context and the design sections hold none of this experiment's results; delete the line to check the whole note
 git_commit:                 # filled from f2 MANIFEST once figures are made
 created: {{date}}
 updated: {{date}}

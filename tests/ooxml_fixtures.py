@@ -127,10 +127,14 @@ def _deck(tmp_path, **kw):
 
 # ── a Word document by hand ───────────────────────────────────────────────────
 
-def _docx(tmp_path, paragraphs, name="paper.docx", media=None, core=False):
+def _docx(tmp_path, paragraphs, name="paper.docx", media=None, core=False, comments=None):
     """`paragraphs` = list of paragraph specs. A spec is a list of runs: ("t", text),
-    ("del", text), ("moveFrom", text); or ("pic", name, descr, png key, svg key or None);
-    or ("tbl", caption, descr, rows). `media` = {key: bytes}; svg keys end in `.svg`."""
+    ("del", text), ("moveFrom", text), ("ins", text), ("moveTo", text), ("tab", ""),
+    ("field-del", result) for a field whose codes are deleted and whose result is not,
+    ("mark", "del" or "ins") for a tracked paragraph mark, ("cstart", id) and ("cend", id)
+    for a comment range; or ("pic", name, descr, png key, svg key or None);
+    or ("tbl", caption, descr, rows). `media` = {key: bytes}; svg keys end in `.svg`.
+    `comments` = {id: (author, text)} writes word/comments.xml."""
     media = media or {}
     part_of, n_img = {}, 0
     for k in media:
@@ -170,21 +174,45 @@ def _docx(tmp_path, paragraphs, name="paper.docx", media=None, core=False):
                           for row in rows)
             body.append(f'<w:tbl><w:tblPr><w:tblCaption w:val="{_a(caption)}"/><w:tblDescription w:val="{_a(descr)}"/></w:tblPr>{trs}</w:tbl>')
         else:
-            runs = []
+            runs, ppr = [], ""
+            change = 'w:id="{}" w:author="D1" w:date="2026-01-01T00:00:00Z"'
             for kind, text in spec:
-                if kind == "t":
+                if kind == "mark":
+                    ppr = f"<w:pPr><w:rPr><w:{text} {change.format(900)}/></w:rPr></w:pPr>"
+                elif kind in ("ins", "moveTo"):
+                    runs.append(f"<w:{kind} {change.format(len(runs))}><w:r><w:t xml:space=\"preserve\">"
+                                f"{html.escape(text)}</w:t></w:r></w:{kind}>")
+                elif kind == "tab":
+                    runs.append("<w:r><w:tab/></w:r>")
+                elif kind == "field-del":
+                    # A reference manager's citation after its codes were deleted as a tracked change.
+                    runs.append(f"<w:del {change.format(len(runs))}><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+                                f"<w:r><w:delInstrText> ADDIN CITATION </w:delInstrText></w:r>"
+                                f"<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r></w:del>"
+                                f"<w:r><w:t>{html.escape(text)}</w:t></w:r>"
+                                f"<w:del {change.format(len(runs) + 1)}><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:del>")
+                elif kind == "cstart":
+                    runs.append(f'<w:commentRangeStart w:id="{text}"/>')
+                elif kind == "cend":
+                    runs.append(f'<w:commentRangeEnd w:id="{text}"/>')
+                elif kind == "t":
                     runs.append(f"<w:r><w:t xml:space=\"preserve\">{html.escape(text)}</w:t></w:r>")
                 elif kind == "del":
                     runs.append(f"<w:del><w:r><w:delText>{html.escape(text)}</w:delText></w:r></w:del>")
                 elif kind == "moveFrom":
                     runs.append(f"<w:moveFrom><w:r><w:t xml:space=\"preserve\">{html.escape(text)}</w:t></w:r></w:moveFrom>")
-            body.append("<w:p>" + "".join(runs) + "</w:p>")
+            body.append("<w:p>" + ppr + "".join(runs) + "</w:p>")
     doc = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
            f'<w:document xmlns:w="{W}" xmlns:wp="{WP}" xmlns:a="{A}" xmlns:r="{R}" xmlns:asvg="{ASVG}" xmlns:pic="{PIC}">'
            f'<w:body>{"".join(body)}</w:body></w:document>')
     pkg_rels = [f'<Relationship Id="rId1" Type="{REL_DOC}" Target="word/document.xml"/>']
     overrides = ['<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>']
     extra = []
+    if comments:
+        cs = "".join(f'<w:comment w:id="{cid}" w:author="{_a(a)}" w:date="2026-01-01T00:00:00Z">'
+                     f'<w:p><w:r><w:t>{html.escape(t)}</w:t></w:r></w:p></w:comment>' for cid, (a, t) in comments.items())
+        extra.append(("word/comments.xml", f'<w:comments xmlns:w="{W}">{cs}</w:comments>'.encode()))
+        overrides.append('<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>')
     if core:
         extra.append(("docProps/core.xml", CORE.encode()))
         overrides.append(f'<Override PartName="/docProps/core.xml" ContentType="{ooxml.CT_CORE}"/>')

@@ -214,7 +214,7 @@ def _chunks(qmd):
 
 
 def test_plain_scaffold_is_unchanged_by_the_template_option(tmp_path):
-    """Opt-in means opt-in: without the option the notebook is the three-chunk stub, nothing
+    """Opt-in means opt-in: without the option the notebook is the generic stub, nothing
     sits beside it, and the result carries the five keys it always did."""
     import os
     res = _scaffold(tmp_path, "A plain run", exp_id="DEMO-plain")
@@ -222,7 +222,22 @@ def test_plain_scaffold_is_unchanged_by_the_template_option(tmp_path):
     assert os.listdir(os.path.dirname(res["analysis_qmd"])) == ["DEMO-plain.qmd"]
     body = open(res["analysis_qmd"], encoding="utf-8").read()
     assert body == scaffold._qmd_stub("DEMO-plain", "A plain run", res["data_dir"], "CyTOF")
-    assert [c.label for c in _chunks(res["analysis_qmd"])] == ["setup", "load", "first-figure"]
+    assert [c.label for c in _chunks(res["analysis_qmd"])] == [
+        "setup", "load", "first-figure", "first-table"]
+
+
+def test_the_generic_notebook_sources_the_experiments_r_folder(tmp_path):
+    """Functions kept as .R files in the experiment's R/ folder are sourced by the setup
+    chunk, its path filled in as data_dir's is, and figrun takes that chunk as setup."""
+    import os
+    res = _scaffold(tmp_path, "A plain run", exp_id="DEMO-plain")
+    root = os.path.dirname(res["data_dir"])
+    body = open(res["analysis_qmd"], encoding="utf-8").read()
+    assert f'r_dir <- "{os.path.join(root, "R")}"' in body
+    assert ('if (dir.exists(r_dir)) for (f in list.files(r_dir, pattern = "[.][Rr]$", '
+            'full.names = TRUE)) source(f)') in body
+    setup = next(c for c in _chunks(res["analysis_qmd"]) if c.label == "setup")
+    assert setup.sources_r_files
 
 
 def test_template_writes_the_notebook_and_its_run_plan(tmp_path):
@@ -595,3 +610,189 @@ def test_template_reads_each_sheet_as_csv_or_xlsx(tmp_path):
     assert "read_sheet(COMP_PANEL_FILE)" in chunks["compensate"]
     assert "read_sheet(COMP_MD_FILE)" in chunks["compensate"]
     assert ".xlsx\"" not in body.replace('c(".csv", ".xlsx")', "")   # no sheet path is typed with its extension
+
+
+# ---- the default notebook is generic; the Wing Lab setup is the `seekit` template ----------
+#
+# The default notebook sourced a seekit checkout, loaded CATALYST and suggested plotDR2(), so a
+# reader without that stack could not run its first chunk. It now uses only the saver the
+# installed figtracer ships; the old setup is a template, chosen per experiment or in the user
+# config. These pin both, and that the choice does not change the .gitignore of a plain scaffold.
+
+def _old_default_stub(exp_id, title, data_dir, platform):
+    """The notebook a plain `figtracer new` wrote before the `seekit` template, verbatim."""
+    return f'''---
+title: "{exp_id} — {title}"
+analysis:
+  modality: "{platform}"
+  role: mixed
+  # Opt into collaborator/publication only after reviewing the derived view.
+  share: [internal]
+---
+
+```{{r}}
+#| label: setup
+here::i_am("analysis/{exp_id}.qmd")
+source("~/code/seekit/tools/reload_helpers.R")
+if (exists("start_session_log")) start_session_log("session.log")
+suppressMessages({{ library(CATALYST); library(SingleCellExperiment); library(ggplot2); library(qs2) }})
+set.seed(1234)
+data_dir <- "{data_dir}"
+```
+
+# Load
+
+```{{r}}
+#| label: load
+# sce <- qs_read(file.path(data_dir, "<object>.qs2"))
+```
+
+# Figures
+
+```{{r}}
+#| label: first-figure
+# p <- plotDR2(sce, dr = "UMAP", color_by = "...")
+# f2(p, w = 10, h = 6, format = "svg", embed = TRUE)
+```
+'''
+
+
+# What `_ensure_render_gitignored` writes into a fresh experiment, as text: the reference a
+# plain scaffold is held to whatever the default notebook is.
+PLAIN_GITIGNORE = (
+    "# figtracer render layer: per-render snapshot qmds, sessioninfo, and image\n"
+    "# renders under outputs/<dated>/ are regenerable. MANIFEST.jsonl is the committed\n"
+    "# figure provenance and stays tracked; this keeps `figtracer sync`'s `git add -A`\n"
+    "# from sweeping large renders (e.g. plot_spill PNGs) into the repo.\n"
+    "outputs/*/\n"
+    "!outputs/MANIFEST.jsonl\n"
+)
+
+
+def _cli_new(tmp_path, monkeypatch, capsys, argv, user_config):
+    """`figtracer new` through labkit's parser, with a temporary registry and user config, so
+    the run never reads ~/.config/labkit."""
+    import json
+    import os
+    from labkit import cli
+    cfg = _registry(tmp_path)
+    cfg["templates_dir"] = os.path.join(os.path.dirname(scaffold.__file__), "templates")
+    monkeypatch.setattr(scaffold.config, "load", lambda path=None: cfg)
+    user = tmp_path / "user-config.yaml"
+    user.write_text(user_config)
+    monkeypatch.setattr(scaffold.config, "_USER_CONFIG", str(user))
+    rc = cli.main(["new", *argv, "--project", "DEMO", "--config", "unused.yaml",
+                   "--stamp", "2026-09-07"])
+    assert rc == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_default_notebook_needs_no_lab_package(tmp_path):
+    res = _scaffold(tmp_path, "A plain run", exp_id="DEMO-scaffold")
+    body = open(res["analysis_qmd"], encoding="utf-8").read()
+    for name in ("seekit", "reload_helpers", "~/code/", "CATALYST", "SingleCellExperiment",
+                 "start_session_log", "plotDR2", "qs2", "f2("):
+        assert name not in body, name
+
+    chunks = {c.label: c for c in _chunks(res["analysis_qmd"])}
+    setup = chunks["setup"].code
+    assert 'source(system2("figtracer", "r-saver", stdout = TRUE))' in setup
+    assert "library(ggplot2)" in setup and "set.seed(" in setup
+    assert f'data_dir <- "{res["data_dir"]}"' in setup
+    # The examples call the savers by their own names, and stay comments until filled in.
+    assert "saveFig(p" in chunks["first-figure"].body and not chunks["first-figure"].is_figure
+    assert "saveTable(df" in chunks["first-table"].body and not chunks["first-table"].code.strip()
+
+
+def test_default_notebook_labels_every_chunk_once(tmp_path):
+    """figrun addresses chunks by label, and a duplicate or a missing one is fatal there. Every
+    chunk carries `#| label:`, never the inline form, which Positron's Outline cannot read."""
+    import re
+    res = _scaffold(tmp_path, "A plain run", exp_id="DEMO-scaffold")
+    body = open(res["analysis_qmd"], encoding="utf-8").read()
+    chunks = _chunks(res["analysis_qmd"])
+    assert len(chunks) == len(re.findall(r"^```\{r\}$", body, flags=re.M)) == 4
+    assert not re.search(r"^```\{r[ ,]", body, flags=re.M)
+    assert all(c.opts.get("label") == c.label for c in chunks)
+    labels = [c.label for c in chunks]
+    assert len(labels) == len(set(labels))
+
+
+def test_seekit_template_writes_the_old_default_notebook(tmp_path):
+    import os
+    res = _scaffold(tmp_path, "A plain run", exp_id="DEMO-scaffold", analysis_template="seekit")
+    body = open(res["analysis_qmd"], encoding="utf-8").read()
+    assert body == _old_default_stub("DEMO-scaffold", "A plain run", res["data_dir"], "CyTOF")
+    assert res["analysis_template"] == "seekit"
+    assert "runplan" not in res          # the template ships no run plan
+    assert os.listdir(os.path.dirname(res["analysis_qmd"])) == ["DEMO-scaffold.qmd"]
+    # As a template it gains the checkpoint rule; a plain scaffold's .gitignore is pinned below.
+    ignore = open(os.path.join(os.path.dirname(res["data_dir"]), ".gitignore")).read()
+    assert ignore.startswith(PLAIN_GITIGNORE) and "analysis/*.qs2" in ignore
+
+
+def test_configured_analysis_template_is_the_default(tmp_path, monkeypatch, capsys):
+    res = _cli_new(tmp_path, monkeypatch, capsys, ["A plain run", "--id", "DEMO-scaffold"],
+                   user_config="analysis_template: seekit\n")
+    assert res["analysis_template"] == "seekit"
+    body = open(res["analysis_qmd"], encoding="utf-8").read()
+    assert body == _old_default_stub("DEMO-scaffold", "A plain run", res["data_dir"], "CyTOF")
+
+
+def test_option_wins_over_the_configured_template(tmp_path, monkeypatch, capsys):
+    res = _cli_new(tmp_path, monkeypatch, capsys,
+                   ["A clustering run", "--id", "DEMO-clustering",
+                    "--analysis-template", "cytof_clustering"],
+                   user_config="analysis_template: seekit\n")
+    assert res["analysis_template"] == "cytof_clustering"
+    assert [c.label for c in _chunks(res["analysis_qmd"])] == CYTOF_LABELS
+
+
+def test_configured_template_does_not_apply_to_a_backfilled_run(tmp_path, monkeypatch, capsys):
+    """--data-dir keeps the run folder's notebook, and a template is refused with it; a default
+    in the user config must not turn every backfill into that error."""
+    existing = tmp_path / "existing-run"
+    existing.mkdir()
+    res = _cli_new(tmp_path, monkeypatch, capsys,
+                   ["An old run", "--id", "DEMO-old", "--data-dir", str(existing)],
+                   user_config="analysis_template: seekit\n")
+    assert "analysis_template" not in res
+    assert not list(existing.glob("**/*.qmd"))
+
+
+def test_a_configured_template_that_no_longer_exists_is_refused_naming_seekit(
+        tmp_path, monkeypatch, capsys):
+    """The Wing Lab template was renamed `seekit` in 0.5.0. A user config still naming a
+    template that is not there gets a refusal that names `seekit` and the config file, with
+    nothing scaffolded, never the generic stub in its place."""
+    import os
+    from labkit import cli
+    cfg = _registry(tmp_path)
+    cfg["templates_dir"] = os.path.join(os.path.dirname(scaffold.__file__), "templates")
+    monkeypatch.setattr(scaffold.config, "load", lambda path=None: cfg)
+    user = tmp_path / "user-config.yaml"
+    user.write_text("analysis_template: labsetup\n")
+    monkeypatch.setattr(scaffold.config, "_USER_CONFIG", str(user))
+    rc = cli.main(["new", "A plain run", "--id", "DEMO-scaffold", "--project", "DEMO",
+                   "--config", "unused.yaml", "--stamp", "2026-09-07"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert err.startswith(f"figtracer new: analysis_template in {user}: --analysis-template "
+                          "'labsetup': no labsetup.qmd"), err
+    assert "the template `seekit`, its name since 0.5.0" in err
+    assert not (tmp_path / "vault").exists() and not (tmp_path / "data").exists()
+
+
+def test_plain_new_without_a_configured_template(tmp_path, monkeypatch, capsys):
+    """No option and no `analysis_template` in the user config: the generic stub, the five keys
+    the result always carried (plus the dashboard), and the .gitignore a plain scaffold always
+    wrote, byte for byte."""
+    import os
+    res = _cli_new(tmp_path, monkeypatch, capsys, ["A plain run", "--id", "DEMO-scaffold"],
+                   user_config="vault_root: /unused\n")
+    assert list(res) == ["experiment_id", "note", "data_dir", "analysis_qmd", "exports_dir",
+                         "dashboard"]
+    body = open(res["analysis_qmd"], encoding="utf-8").read()
+    assert body == scaffold._qmd_stub("DEMO-scaffold", "A plain run", res["data_dir"], "CyTOF")
+    root = os.path.dirname(res["data_dir"])
+    assert open(os.path.join(root, ".gitignore")).read() == PLAIN_GITIGNORE

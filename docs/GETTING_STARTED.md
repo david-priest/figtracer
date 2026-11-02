@@ -71,7 +71,7 @@ Python or Jupyter:
 ```python
 from figtracer import savefig
 
-savefig(fig, title="umap_level1")
+savefig(fig, title="umap_level1", embed=True)
 ```
 
 Install `figtracer` into the Python environment that runs the analysis as well as installing
@@ -81,14 +81,14 @@ the CLI tool; `uv tool` environments are intentionally isolated. For example, fr
 python -m pip install -e /path/to/figtracer
 ```
 
-R, using the bundled dependency-free shim from a clone:
+R, using the dependency-free saver that ships with the installed CLI (`figtracer r-saver` prints its path):
 
 ```r
-source("/path/to/figtracer/r/figtracer.R")
-saveFig(p, title = "umap_level1")
+source(system2("figtracer", "r-saver", stdout = TRUE))
+saveFig(p, title = "umap_level1", embed = TRUE)
 ```
 
-Both write a figure plus an `outputs/MANIFEST.jsonl` record. From there, `figtracer fig embed`
+Both write a figure plus an `outputs/MANIFEST.jsonl` record. `embed = TRUE` marks the figure for a note; without it a figure is saved and recorded but not placed, since figure savers default to FALSE. From there, `figtracer fig embed`
 or `figtracer figsync sync` can keep figures in a real Markdown note current.
 
 ## Grow only when it helps
@@ -98,9 +98,7 @@ headless re-rendering, and end-of-session sync. They are optional layers, not pr
 
 - [Full experiment-system setup](FULL_SYSTEM.md) — vault configuration, project registry,
   scaffolding, Mission Control, and the complete analysis loop.
-- `figtracer figrun` — re-render a notebook's figure chunks headlessly after an edit, and
-  `figtracer notecheck` — check every number in a note against the current outputs. Both resolve
-  the notebook through a registered experiment; see the README's "Re-rendering from the notebook"
-  and "Numbers and tables".
-- [CyTOF example](../examples/cytof) — public R and Python analyses feeding one note.
+- `figtracer figrun` — re-render a notebook's figure and table chunks, R or Python, headlessly after an edit, and `figtracer notecheck` — check every number in a note against the current outputs. Both resolve the notebook through a registered experiment; see the README's "Re-rendering from the notebook" and "Numbers and tables".
+- [Notebook contract](NOTEBOOKS.md) — labelled chunks, chunk roles and the savers, for R and Python, with a minimal notebook in each.
+- [CyTOF example](../examples/cytof) (optional) — public CyTOF data analysed in R with the seekit package and in Python with scanpy, feeding one note.
 - [Analysis doctor](ANALYSIS_DOCTOR.md) — reproducibility checks for analysis documents.

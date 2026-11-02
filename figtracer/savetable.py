@@ -20,8 +20,9 @@ import os
 import re
 import sys
 
+from figtracer import context
 from figtracer.manifest import TABLE, append_entry
-from figtracer.savefig import _git, _notebook_path, _repo_root
+from figtracer.savefig import _default_outputs, _git, _notebook_path
 
 
 def _write_csv(df, path: str) -> tuple[int, list[str]]:
@@ -45,12 +46,18 @@ def _write_csv(df, path: str) -> tuple[int, list[str]]:
 
 
 def savetable(df, title: str, *, embed: bool = True, channel: str = "note",
-              outputs: str | None = None, notebook: str | None = None) -> dict:
-    """Write `df` to `<outputs>/<title>.csv` and append its MANIFEST line. Returns the record."""
+              outputs: str | None = None, notebook: str | None = None,
+              chunk: str | None = None) -> dict:
+    """Write `df` to `<outputs>/<title>.csv` and append its MANIFEST line. Returns the record.
+
+    `notebook`, `chunk` and `outputs` default to the execution context, as in `savefig()`.
+    """
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", title):
         raise ValueError("savetable: `title` must be a filename-safe identifier")
-    nb = notebook or _notebook_path()
-    outputs = outputs or os.path.join(_repo_root(os.getcwd()), "outputs")
+    nb = notebook or context.get(context.NOTEBOOK) or _notebook_path()
+    chunk = chunk or context.get(context.CHUNK)
+    context.require("savetable", nb, chunk)
+    outputs = outputs or context.get(context.OUTPUTS) or _default_outputs(nb)
     os.makedirs(outputs, exist_ok=True)
     fname = f"{title}.csv"
     n_rows, cols = _write_csv(df, os.path.join(outputs, fname))
@@ -61,7 +68,7 @@ def savetable(df, title: str, *, embed: bool = True, channel: str = "note",
         "embed": bool(embed), "fig_format": "csv",
         "n_rows": n_rows, "n_cols": len(cols), "columns": cols,
         "timestamp": now.strftime("%Y-%m-%d_%H.%M.%S"), "saved_at": now.isoformat(),
-        "qmd_path": nb, "chunk_label": None,
+        "qmd_path": nb, "chunk_label": chunk,
         "git_commit": (_git(["rev-parse", "HEAD"], outputs) or "")[:12] or None,
         "git_branch": _git(["rev-parse", "--abbrev-ref", "HEAD"], outputs),
         "py_version": f"{sys.version_info.major}.{sys.version_info.minor}",

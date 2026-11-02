@@ -67,12 +67,6 @@ def q(prefix: str, tag: str) -> str:
     return "{%s}%s" % (NS[prefix], tag)
 
 
-# Text under these elements disappears when Word's tracked changes are accepted, so a reader
-# that keeps it reports a sentence that is already gone, and a moved sentence twice. A move is
-# recorded as `w:moveFrom` holding plain `w:t`, not `w:delText`, which is why both are listed.
-DROP = {q("w", "del"), q("w", "moveFrom")}
-
-
 class IntegrityError(RuntimeError):
     """The rewritten package did not read back as the original plus the intended change."""
 
@@ -226,8 +220,260 @@ def _a_text(p) -> str:
 
 
 def _w_text(p) -> str:
-    return "".join(t.text or "" for t in p.iter(q("w", "t"))
-                   if not any(a.tag in DROP for a in t.iterancestors()))
+    return "".join(s.text for s in _w_segments(p)[0]
+                   if s.kind == "t" and s.change not in DELETED and not s.field_deleted)
+
+
+# ── tracked changes, as Word accepts or rejects them ──────────────────────────
+#
+# `_w_text` is the accepted text of one paragraph. A manuscript needs more: the text before
+# the changes, who made which, the comments and what they are anchored to, and the joins a
+# deleted paragraph mark makes. Two behaviours are Word's and not obvious:
+#
+# - A field (a reference manager's citation, a cross-reference) whose field codes were deleted
+#   as a tracked change while its result text was not: accepting the changes removes the
+#   result too. Reading the result as kept reports text the accepted document does not have.
+# - A deleted paragraph mark joins that paragraph to the next on accept; an inserted one
+#   joins them on reject.
+
+CHANGE_TAGS = {q("w", "ins"): "ins", q("w", "del"): "del",
+               q("w", "moveFrom"): "moveFrom", q("w", "moveTo"): "moveTo"}
+# Text under the first two disappears when Word's tracked changes are accepted, so a reader
+# that keeps it reports a sentence that is already gone, and a moved sentence twice. A move is
+# recorded as `w:moveFrom` holding plain `w:t`, not `w:delText`, which is why both are listed.
+DELETED = frozenset({"del", "moveFrom"})
+INSERTED = frozenset({"ins", "moveTo"})
+VIEWS = ("accepted", "original", "markup")
+
+
+@dataclass
+class Segment:
+    text: str
+    change: str | None             # None, or one of CHANGE_TAGS' values
+    author: str | None
+    field_deleted: bool = False    # result text of a field whose codes are deleted
+    kind: str = "t"                # "t" for text; "tab" and "break" for the whitespace they stand for
+
+
+@dataclass
+class RevisedParagraph:
+    unit: int                      # the same 1-based number as Paragraph.unit
+    segments: list[Segment]
+    mark: tuple[str, str] | None   # (change, author) when the paragraph mark is a tracked change
+    comments: list[str] = field(default_factory=list)   # ids of comments anchored in it
+
+    def text(self, view: str = "accepted") -> str:
+        keep = (lambda s: s.change not in DELETED and not s.field_deleted) if view == "accepted" \
+            else (lambda s: s.change not in INSERTED)
+        return "".join(s.text for s in self.segments if keep(s))
+
+
+@dataclass
+class Comment:
+    id: str
+    author: str
+    date: str
+    text: str
+    anchor: str                    # the accepted text the comment is anchored to
+    unit: int                      # the paragraph its anchor starts in, 0 if none
+
+
+@dataclass
+class FieldWarning:
+    unit: int
+    result: str                    # the result text accepting the changes removes
+
+
+@dataclass
+class Revisions:
+    path: str
+    paragraphs: list[RevisedParagraph]
+    comments: list[Comment]
+    field_warnings: list[FieldWarning]
+    changes: list[dict]            # one per tracked change: kind, author, date, chars
+
+    def view(self, view: str = "accepted", who: bool = False) -> list[tuple[int, str]]:
+        """(unit, text) per paragraph as the document reads in `view`. Paragraphs a
+        tracked paragraph mark joins come out as one, numbered by the first."""
+        if view not in VIEWS:
+            raise ValueError(f"view must be one of {VIEWS}")
+        out, carry, start = [], "", None
+        for para in self.paragraphs:
+            if view == "markup":
+                text, joined = _markup(para, who), False
+            else:
+                text = para.text(view)
+                joined = para.mark is not None and para.mark[0] in (DELETED if view == "accepted" else INSERTED)
+            start = para.unit if start is None else start
+            carry += text
+            if joined:
+                continue
+            out.append((start, carry))
+            carry, start = "", None
+        if start is not None:
+            out.append((start, carry))
+        return out
+
+    def by_author(self) -> list[dict]:
+        """The tracked changes summed per (author, kind), with their date range."""
+        agg: dict[tuple[str, str], dict] = {}
+        for c in self.changes:
+            a = agg.setdefault((c["author"], c["kind"]), {"author": c["author"], "kind": c["kind"],
+                                                           "count": 0, "chars": 0, "dates": []})
+            a["count"] += 1
+            a["chars"] += c["chars"]
+            if c["date"]:
+                a["dates"].append(c["date"])
+        return [agg[k] for k in sorted(agg)]
+
+
+def _initials(name: str | None) -> str:
+    parts = [p for p in (name or "").replace("_", " ").split() if p]
+    return "".join(p[0] for p in parts).upper() or "?"
+
+
+def _markup(para: RevisedParagraph, who: bool) -> str:
+    wrap = {"ins": ("{+", "+}"), "del": ("[-", "-]"), "moveTo": ("{>", ">}"), "moveFrom": ("[<", "<]")}
+    parts = []
+    for s in para.segments:
+        if s.change in wrap:
+            tag = "|" + _initials(s.author) if who else ""
+            parts.append(wrap[s.change][0] + s.text + tag + wrap[s.change][1])
+        else:
+            parts.append(s.text)
+    if para.mark is not None:
+        parts.append(" ¶" + ("+" if para.mark[0] in INSERTED else "-"))
+    return "".join(parts)
+
+
+class _Walker:
+    """One pass over a paragraph's runs, keeping the tracked-change state, the open fields
+    and the open comment ranges. Fields and comment ranges may span paragraphs, so one walker
+    serves a whole document."""
+
+    def __init__(self, whitespace: bool):
+        self.whitespace = whitespace
+        self.fields: list[dict] = []
+        self.open_comments: dict[str, None] = {}
+        self.anchor: dict[str, list[str]] = {}
+        self.anchor_unit: dict[str, int] = {}
+        self.changes: list[dict] = []
+        self.warnings: list[FieldWarning] = []
+
+    def paragraph(self, p, unit: int = 0) -> tuple[list[Segment], tuple[str, str] | None, list[str]]:
+        segments: list[Segment] = []
+        seen: list[str] = []
+        mark = None
+        ppr = p.find(q("w", "pPr"))
+        rpr = ppr.find(q("w", "rPr")) if ppr is not None else None
+        if rpr is not None:
+            for tag, kind in CHANGE_TAGS.items():
+                el = rpr.find(tag)
+                if el is not None:
+                    mark = (kind, el.get(q("w", "author"), "?"))
+                    self.changes.append({"kind": "paragraph mark " + kind, "author": mark[1],
+                                         "date": el.get(q("w", "date"), ""), "chars": 0})
+        for child in p:
+            if child.tag != q("w", "pPr"):
+                self._walk(child, segments, None, None, unit, seen)
+        return segments, mark, seen
+
+    def _walk(self, el, segments, change, author, unit, seen):
+        tag = el.tag
+        if tag in CHANGE_TAGS:
+            kind, who = CHANGE_TAGS[tag], el.get(q("w", "author"), "?")
+            before = sum(len(s.text) for s in segments)
+            for child in el:
+                self._walk(child, segments, kind, who, unit, seen)
+            self.changes.append({"kind": kind, "author": who, "date": el.get(q("w", "date"), ""),
+                                 "chars": sum(len(s.text) for s in segments) - before})
+            return
+        if tag in (q("w", "rPrChange"), q("w", "pPrChange")):
+            self.changes.append({"kind": "formatting", "author": el.get(q("w", "author"), "?"),
+                                 "date": el.get(q("w", "date"), ""), "chars": 0})
+            return
+        if tag == q("w", "commentRangeStart"):
+            cid = el.get(q("w", "id"))
+            self.open_comments[cid] = None
+            self.anchor_unit.setdefault(cid, unit)
+            seen.append(cid)
+            return
+        if tag == q("w", "commentRangeEnd"):
+            self.open_comments.pop(el.get(q("w", "id")), None)
+            return
+        if tag == q("w", "fldChar"):
+            ftype = el.get(q("w", "fldCharType"))
+            if ftype == "begin":
+                self.fields.append({"deleted": change in DELETED, "result": False, "text": [], "unit": unit})
+            elif ftype == "separate" and self.fields:
+                self.fields[-1]["result"] = True
+            elif ftype == "end" and self.fields:
+                f = self.fields.pop()
+                if f["deleted"] and "".join(f["text"]).strip():
+                    self.warnings.append(FieldWarning(f["unit"], "".join(f["text"])))
+            return
+        if tag in (q("w", "instrText"), q("w", "delInstrText")):
+            return
+        text, kind = None, "t"
+        if tag in (q("w", "t"), q("w", "delText")):
+            text = el.text or ""
+        elif tag == q("w", "tab"):
+            text, kind = "\t", "tab"
+        elif tag in (q("w", "br"), q("w", "cr")):
+            text, kind = "\n", "break"
+        elif tag == q("w", "noBreakHyphen"):
+            text = "-"
+        if text is not None:
+            if kind != "t" and not self.whitespace:
+                return
+            in_result = [f for f in self.fields if f["result"]]
+            fdel = any(f["deleted"] for f in in_result)
+            for f in in_result:
+                f["text"].append(text)
+            if text:
+                segments.append(Segment(text, change, author, fdel, kind))
+            if change not in DELETED and not fdel:
+                for cid in self.open_comments:
+                    self.anchor.setdefault(cid, []).append(text)
+            return
+        for child in el:
+            self._walk(child, segments, change, author, unit, seen)
+
+
+def _w_segments(p) -> tuple[list[Segment], tuple[str, str] | None]:
+    """The runs of one paragraph read on their own, without tabs and breaks: what `_w_text`
+    has always returned, less a field result whose codes are deleted."""
+    segments, mark, _ = _Walker(whitespace=False).paragraph(p)
+    return segments, mark
+
+
+def revisions(path: str) -> Revisions:
+    """A .docx with its tracked changes and comments kept apart, for the views a manuscript
+    needs: accepted (what accept-all leaves), original (what reject-all leaves) and markup.
+    Paragraph units are the ones `read()` numbers, so the two can be compared."""
+    if document_format(path) != "docx":
+        raise ValueError(f"tracked changes are read from a .docx only: {path}")
+    with zipfile.ZipFile(path) as z:
+        root = etree.fromstring(z.read("word/document.xml"))
+        comments_xml = etree.fromstring(z.read("word/comments.xml")) if "word/comments.xml" in z.namelist() else None
+    body = root.find(q("w", "body"))
+    walker = _Walker(whitespace=True)
+    paragraphs = []
+    for unit, p in enumerate(body.iter(q("w", "p")) if body is not None else [], 1):
+        segments, mark, seen = walker.paragraph(p, unit)
+        paragraphs.append(RevisedParagraph(unit, segments, mark, seen))
+    # A field inside a paragraph that is deleted anyway loses nothing; warn only where text survives.
+    survives = {p.unit for p in paragraphs if p.text("accepted").strip()}
+    warnings = [w for w in walker.warnings if w.unit in survives]
+    comments = []
+    if comments_xml is not None:
+        for c in comments_xml.iter(q("w", "comment")):
+            cid = c.get(q("w", "id"))
+            body_text = " ".join("".join(t.text or "" for t in cp.iter(q("w", "t"))) for cp in c.iter(q("w", "p")))
+            comments.append(Comment(cid, c.get(q("w", "author"), "?"), c.get(q("w", "date"), ""),
+                                    body_text.strip(), "".join(walker.anchor.get(cid, [])),
+                                    walker.anchor_unit.get(cid, 0)))
+    return Revisions(path, paragraphs, comments, warnings, walker.changes)
 
 
 def _slide_parts(z: zipfile.ZipFile) -> list[str]:

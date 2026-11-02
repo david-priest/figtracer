@@ -7,6 +7,8 @@ is **from the cluster-median matrix, not by eyeballing the heatmap image**.
 Read this whenever asked to "make the merging canvas" / "rebuild the merge table"
 / "relabel the clusters" for a CyTOF (or similar) clustering step.
 
+This is an optional workflow for CyTOF clustering notebooks. figtracer's part is `figtracer merge-table`, which reads the canvas; the R side, `read_merge_canvas()` and the SOM-node helpers below, is in the seekit package, and nothing else in figtracer depends on it.
+
 ---
 
 ## ⛔ TWO NON-NEGOTIABLES (David has had to repeat these, angrily — do NOT ship a canvas that violates either)
@@ -176,7 +178,7 @@ level (e.g. meta25) and pull the specific SOM nodes out into their own cluster,
 producing a **new clustering level** that then flows through the normal pick-k +
 canvas machinery.
 
-Two seekit helpers (`~/code/seekit/R/`):
+Two seekit helpers (in seekit's `R/` folder):
 
 1. **`som_node_profile(x, markers, group_k = "meta25")`** — one row per SOM node: cell
    count, the metacluster it sits in, and 0-1 scaled median expression (matches the

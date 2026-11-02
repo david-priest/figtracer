@@ -12,6 +12,8 @@ separate auto-generated index note.
   figtracer figsync sync     [--exp ID | --project KEY] [-y]                materialize embedded figures
   figtracer figsync register <title> --file P [--exp ID | --project KEY] [-y]  adopt a non-f2 image
   figtracer figsync prune    [--exp ID | --project KEY] [--keep N] [-y]     trash superseded renders
+  figtracer figsync prune    --title T [--title T2] [--reason R] [--exp ID] [-y]  retire whole titles
+  figtracer figsync prune    --titles-file F [--exp ID] [-y]                 (F: <title>\t<reason> lines)
 
 Scope: `--exp` is an experiment (a note carrying `experiment_id`); `--project` is a
 projects.yaml key, and operates on the project's OWN notes — planning, proposal,
@@ -49,9 +51,11 @@ import glob
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 
 from figtools import links as _links
 from labkit import config as lkconfig
@@ -104,6 +108,15 @@ def _rasterizable(e) -> bool:
     """A render figsync can materialise into a stable note PNG."""
     p = (e.get("_path") or "").lower()
     return p.endswith(".pdf") or p.endswith(".png") or p.endswith(".svg")
+
+
+def _in_place_table(e) -> bool:
+    """A table written in place: a `kind: table` entry, or any CSV at the root of
+    outputs/ (where saveTable() writes one), whatever its line says."""
+    if _manifest.kind(e) == _manifest.TABLE:
+        return True
+    rel = os.path.normpath(e.get("rel_path") or e.get("fig") or "")
+    return os.path.dirname(rel) == "" and rel.lower().endswith(".csv")
 
 
 def _load_versions(analysis_dir: str, walk_up: bool = True) -> dict:
@@ -403,13 +416,17 @@ def materialize_tables(tables: dict, eid: str, notes: list[str], execute: bool =
                     with open(n, "w", encoding="utf-8") as f:
                         f.write(new)
         (synced if changed_any else current).append(t)
-    unplaced = sorted(t for t, e in tables.items() if e.get("embed") and t not in ref)
+    unplaced = sorted(t for t, e in tables.items() if _manifest.embedded(e) and t not in ref)
     return {"synced": synced, "current": current, "missing": missing, "unplaced": unplaced}
 
 
 def _exp_paths(args):
     cfg = lkconfig.load(args.config) if args.config else lkconfig.load()
-    exp = resolve(cfg, exp=args.exp)
+    return _exp_dirs(resolve(cfg, exp=args.exp))
+
+
+def _exp_dirs(exp: dict):
+    """`_exp_paths` for an experiment already resolved (figrun has resolved it)."""
     eid = str(exp.get("experiment_id"))
     note = exp["_note"]
     note_dir = os.path.dirname(note)
@@ -475,9 +492,10 @@ def _paths(args):
 
 
 def _f2_calls(src: str, name: str = "f2"):
-    """Yield the full source text of each `name`(...) call — f2 by default,
-    saveFig for figrun — brace-balanced and quote-aware (so parens inside a title
-    string don't break balancing), skipping calls that begin on a commented line."""
+    """Yield the full source text of each `name`(...) call — f2 by default, any
+    figure saver for figrun and _qmd_embed_titles — brace-balanced and quote-aware (so
+    parens inside a title string don't break balancing), skipping calls that begin on
+    a commented line."""
     for m in re.finditer(rf"\b{re.escape(name)}\s*\(", src):
         ls = src.rfind("\n", 0, m.start()) + 1
         if src[ls:m.start()].lstrip().startswith("#"):
@@ -500,20 +518,41 @@ def _f2_calls(src: str, name: str = "f2"):
         yield src[m.start():j + 1]
 
 
-def _qmd_embed_titles(qmd: str | None) -> set:
-    """Titles of f2() calls flagged embed = TRUE/T in the qmd (named or positional).
-    Whole-call (multi-line safe), not per-line."""
+def _qmd_embed_titles(qmd: str | None, kind: str = "figure") -> set:
+    """Titles of figure-saver calls flagged embed = TRUE/T in the qmd (named or
+    positional), or with `kind="table"` of table-saver calls not flagged embed =
+    FALSE/F: a figure saver defaults to FALSE and a table saver to TRUE, as figrun reads
+    them (figrun.EMBED_TRUE). Whole-call (multi-line safe), not per-line. The savers are
+    figrun's (`figrun: {figure_savers, table_savers}` in config.yaml or the notebook's
+    front matter, default f2 and saveFig, and saveTable): scanning f2() alone left a note's embed of a saveFig title
+    that was not rendered yet reported as ORPHAN instead of AWAITING RE-RUN.
+
+    Python chunks are read the way figrun reads them, from their parse tree with
+    Python's savers (default savefig and savetable): a call flagged for a note with a
+    literal title, or no title, which savefig() takes from the chunk label."""
+    from figtracer import figrun
     titles: set[str] = set()
     if not qmd or not os.path.exists(qmd):
         return titles
+    table = kind == "table"
     with open(qmd, encoding="utf-8") as f:
         src = f.read()
-    for call in _f2_calls(src):
-        if not re.search(r"\bembed\s*=\s*(TRUE|T)\b", call):
+    # The notebook's own `figrun:` block wins over config.yaml's, as in figrun.
+    fc, where = figrun.config_for(qmd)
+    names = figrun.savers(fc, where=where)[1 if table else 0]
+    for call in [c for name in names for c in _f2_calls(src, name)]:
+        if (figrun.EMBED_FALSE.search(call) if table else not figrun.EMBED_TRUE.search(call)):
             continue
         m = re.search(r'\btitle\s*=\s*"([^"]+)"', call) or re.search(r'"([^"]+)"', call)
         if m:
             titles.add(m.group(1))
+    py_names = figrun.savers(fc, "python", where)[1 if table else 0]
+    for ch in figrun.parse_chunks(qmd):
+        if ch.language != "python":
+            continue
+        for title, dynamic, embed in figrun.py_saver_calls(ch, py_names, embed_default=table) or []:
+            if embed and not dynamic:
+                titles.add(title)
     return titles
 
 
@@ -534,7 +573,7 @@ def _note_embeds(eid: str, notes: list[str]) -> dict:
 def cmd_index(figs: dict) -> None:
     for t in sorted(figs):
         e = figs[t]
-        flag = "EMBED" if e.get("embed") else "     "
+        flag = "EMBED" if _manifest.embedded(e) else "     "
         miss = "  (NO on-disk render)" if e.get("_missing") else ""
         print(f"{e.get('saved_at', ''):26} {flag} v{e['_n']:<2} "
               f"{(e.get('git_commit') or '-')[:8]:8} {t}{miss}")
@@ -552,7 +591,7 @@ def _split_unplaced(figs: dict, ref: dict) -> tuple[list, list]:
     `resolve_figures` marks that `_missing`. Those titles are history, not work
     outstanding, and counting them made drift report "10 unplaced" on an experiment
     where seven of the ten had no file left to place."""
-    loose = sorted(t for t, e in figs.items() if e.get("embed") and t not in ref)
+    loose = sorted(t for t, e in figs.items() if _manifest.embedded(e) and t not in ref)
     return ([t for t in loose if not figs[t].get("_missing")],
             [t for t in loose if figs[t].get("_missing")])
 
@@ -560,7 +599,7 @@ def _split_unplaced(figs: dict, ref: dict) -> tuple[list, list]:
 def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
               attach: str | None = None, show_all: bool = False,
               tables: dict | None = None, documents: dict | None = None,
-              resolver=None) -> None:
+              resolver=None, qmd_tables: set | None = None) -> None:
     ref = _note_embeds(eid, notes)
     titles = set(figs)
     awaiting = orphan = not_mat = stale = 0
@@ -588,7 +627,7 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
             else:
                 tag = "ok"
         elif slug in qmd_titles:
-            tag = "AWAITING RE-RUN (f2 embed=TRUE exists; not yet rendered)"
+            tag = "AWAITING RE-RUN (a saver call with embed=TRUE exists; not yet rendered)"
             awaiting += 1
         else:
             tag = "ORPHAN (no registered source — register it, or fix embed/rename)"
@@ -600,7 +639,10 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
         for t in sorted(tref):
             where = ", ".join(sorted(set(tref[t])))
             e = tables.get(t)
-            if e is None:
+            if e is None and t in (qmd_tables or ()):
+                tag = "AWAITING RE-RUN (a table saver call for a note exists; not yet saved)"
+                awaiting += 1
+            elif e is None:
                 tag = "ORPHAN TABLE (no MANIFEST table entry — saveTable() it, or remove the block)"
                 orphan += 1
             elif e.get("_missing"):
@@ -615,7 +657,7 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
                     tag = "STALE TABLE (block differs from the current CSV — run figsync sync)"
                     stale += 1
             print(f"  [{tag}]  {t}  ({where})")
-        unplaced_t = sorted(t for t, e in tables.items() if e.get("embed") and t not in tref)
+        unplaced_t = sorted(t for t, e in tables.items() if _manifest.embedded(e) and t not in tref)
         if unplaced_t:
             print(f"  unplaced tables ({len(unplaced_t)}): "
                   f"{', '.join(unplaced_t[:UNPLACED_SHOWN])}")
@@ -661,6 +703,129 @@ def cmd_drift(figs: dict, eid: str, notes: list[str], qmd_titles: set,
     print(f"\nsummary: {len(ref)} embeds — {stale} STALE (run sync), {awaiting} awaiting re-run, "
           f"{not_mat} not materialised (run sync), "
           f"{orphan} orphaned (no registered source), {len(unplaced)} unplaced{gone}{docs}")
+
+
+# ── note placement: the check figrun and `figtracer sync` end with ──────────────
+# A notebook was run through figrun three times and a deck built from it, and not one
+# figure reached the experiment's note (2026-10-27); a drift audit the same day found
+# 23 of 54 experiments with unplaced figures. The rule to place them existed, and
+# `drift` would have said so, but nothing ran `drift`. So the commands that render
+# and sync figures now end with the part of `drift` that needs acting on, name the
+# titles and print the commands that fix it, and exit PLACEMENT_EXIT while any is left.
+PLACEMENT_EXIT = 3
+
+
+def placement_status(figs: dict, eid: str, notes: list[str], attach: str,
+                     tables: dict | None = None, rendered: set | None = None) -> dict:
+    """What stands between an experiment's renders and its notes, as `drift` judges it.
+
+    unplaced / unplaced_tables   embed=TRUE, a render or CSV on disk, in no note. With
+                                 `rendered` (the titles a figrun run wrote), only those;
+                                 the rest are counted in `earlier_unplaced`.
+    stale / stale_tables         placed, but the attachment is older than the newest
+                                 render, or the table block differs from the CSV.
+    not_materialised             placed, the render resolves, no attachment PNG yet.
+
+    The tests are `cmd_drift`'s: `_split_unplaced`, `_is_current` and `_upsert_table`.
+    ORPHAN and DANGLING embeds are left to `drift`: neither `place` nor `sync` fixes them."""
+    ref = _note_embeds(eid, notes)
+    unplaced, _ = _split_unplaced(figs, ref)
+    stale, not_mat = [], []
+    for slug in sorted(ref):
+        e = figs.get(slug)
+        if e is None or e.get("_missing"):
+            continue
+        png = os.path.join(attach, _attachment_name(eid, slug, "note"))
+        if not os.path.exists(png):
+            not_mat.append(slug)
+        elif not _is_current(png, e["_path"]):
+            stale.append(slug)
+    tables = tables or {}
+    tref = _note_tables(eid, notes) if tables else {}
+    unplaced_t = sorted(t for t, e in tables.items()
+                        if _manifest.embedded(e) and t not in tref and not e.get("_missing"))
+    stale_t = []
+    for t in sorted(tref):
+        e = tables.get(t)
+        if e is None or e.get("_missing"):
+            continue
+        body = _table_body(e["_path"])
+        for n in notes:
+            if os.path.basename(n) in tref[t]:
+                with open(n, encoding="utf-8") as f:
+                    if _upsert_table(f.read(), eid, t, body)[1]:
+                        stale_t.append(t)
+                        break
+    earlier = 0
+    if rendered is not None:
+        earlier = sum(t not in rendered for t in unplaced + unplaced_t)
+        unplaced = [t for t in unplaced if t in rendered]
+        unplaced_t = [t for t in unplaced_t if t in rendered]
+    return {"unplaced": unplaced, "unplaced_tables": unplaced_t, "stale": stale,
+            "stale_tables": stale_t, "not_materialised": not_mat, "earlier_unplaced": earlier}
+
+
+def placement_blocking(status: dict) -> int:
+    """How many items keep the notes behind the renders: what PLACEMENT_EXIT counts."""
+    return sum(len(status[k]) for k in
+               ("unplaced", "unplaced_tables", "stale", "stale_tables", "not_materialised"))
+
+
+def _shell_word(s: str) -> str:
+    return s if re.fullmatch(r"[\w.,:+@%/=-]+", s) else shlex.quote(s)
+
+
+def placement_lines(status: dict, eid: str, note: str, rendered: bool = False) -> list[str]:
+    """The block printed for `placement_status`: each title by state, then the commands
+    that clear it. `note` is the basename of the experiment's hub note, the default
+    destination for `place`. One line when nothing is behind."""
+    exp = _shell_word(eid)
+    earlier = status.get("earlier_unplaced", 0)
+    tail = ([f"  also {earlier} embed=TRUE title(s) from earlier runs in no note "
+             f"(`figtracer figsync drift --exp {exp} --all` lists them)"] if earlier else [])
+    if not placement_blocking(status):
+        what = "every embed=TRUE title this run rendered is placed" if rendered \
+            else "every embed=TRUE title is placed"
+        return [f"figsync: {eid} notes current — {what}; 0 STALE"] + tail
+
+    rows = ([("UNPLACED", t, "embed=TRUE, rendered" + (" this run" if rendered else "")
+              + ", in no note") for t in status["unplaced"]]
+            + [("UNPLACED TABLE", t, "embed=TRUE, in no note") for t in status["unplaced_tables"]]
+            + [("STALE", t, "attachment older than the newest render") for t in status["stale"]]
+            + [("STALE TABLE", t, "block differs from the current CSV") for t in status["stale_tables"]]
+            + [("NOT MATERIALISED", t, "placed, no attachment yet") for t in status["not_materialised"]])
+    width = max(len(r[0]) for r in rows)
+    out = [f"== figsync: {eid} notes are behind the renders "
+           f"({placement_blocking(status)} to fix) =="]
+    shown = rows[:UNPLACED_SHOWN]
+    out += [f"  {state:<{width}}  {t}  ({why})" for state, t, why in shown]
+    if len(rows) > len(shown):
+        out.append(f"  … and {len(rows) - len(shown)} more (`figtracer figsync drift --exp {exp} --all`)")
+
+    place = ([(t, "") for t in status["unplaced"]]
+             + [(t, " --table") for t in status["unplaced_tables"]])
+    dest = f'"{note}"' if not re.search(r'["$`\\]', note) else shlex.quote(note)
+    if place:
+        out.append("\n  place each beside the text it supports, then add a caption (--caption):")
+        for t, flag in place[:UNPLACED_SHOWN]:
+            out.append(f"    figtracer figsync place {_shell_word(t)}{flag} --exp {exp} --note {dest} -y")
+        if len(place) > UNPLACED_SHOWN:
+            out.append(f"    … and {len(place) - UNPLACED_SHOWN} more")
+        out.append("  a title not meant for a note: set embed = FALSE in its saver call "
+                   "(f2(), saveFig(), saveTable(); embed=False in savefig(), savetable())")
+    out.append(f"\n  {'then ' if place else ''}write the attachments and check:")
+    out.append(f"    figtracer figsync sync --exp {exp} -y")
+    out.append(f"    figtracer figsync drift --exp {exp}      (0 unplaced, 0 STALE)")
+    return out + tail
+
+
+def placement_for(exp: dict, rendered: set | None = None) -> tuple[dict, str]:
+    """`placement_status` for a resolved experiment record, with the hub note's basename."""
+    eid, data_dir, _note_dir, attach, notes, _qmd = _exp_dirs(exp)
+    figs = resolve_figures(data_dir)
+    tables = resolve_tables(data_dir)
+    return (placement_status(figs, eid, notes, attach, tables, rendered),
+            os.path.basename(exp["_note"]))
 
 
 def _attachment_name(eid: str, title: str, channel: str = "note") -> str:
@@ -772,7 +937,7 @@ def materialize(figs, eid, note_dir, attach, notes, dpi=300, execute=False,
     `force` is the escape hatch for the one thing mtimes cannot see: a `--dpi` change.
     """
     ref = _note_embeds(eid, notes)
-    targets = sorted(t for t, e in figs.items() if e.get("embed") and t in ref)
+    targets = sorted(t for t, e in figs.items() if _manifest.embedded(e) and t in ref)
     unplaced, _ = _split_unplaced(figs, ref)
     if execute and targets:
         os.makedirs(attach, exist_ok=True)
@@ -876,12 +1041,53 @@ def cmd_sync(figs, eid, attach, note_dir, notes, dpi, execute, force=False,
     return 0
 
 
+FENCE = re.compile(r"^ {0,3}(```|~~~)")
+
+
+def section_end(text: str, heading: str) -> tuple[int | None, list[str]]:
+    """Where `place --after HEADING` inserts: the end of the section under the one
+    heading whose text starts with HEADING, compared as `notecheck_sections:` compares
+    it (without its number and case, so "Results" finds "## 3. Results"). The section
+    runs to the next heading at its level or above, so a heading's subsections are part
+    of it and blocks placed one after another stay in that order. Headings inside the
+    frontmatter or a code fence are not headings.
+
+    Returns (offset of the line that ends the section, or len(text) at the end of the
+    note; the headings that matched), with None for the offset unless exactly one did."""
+    from figtracer.notecheck import HEADING, _heading_key
+    key = _heading_key(heading)
+    lines = text.split("\n")
+    pos, fence, front = 0, None, bool(lines) and lines[0].strip() == "---"
+    found, end = [], None
+    for k, line in enumerate(lines):
+        start, pos = pos, pos + len(line) + 1
+        if front:
+            front = not (k > 0 and line.strip() in ("---", "..."))
+            continue
+        f = FENCE.match(line)
+        if f:
+            fence = None if fence == f.group(1) else (fence or f.group(1))
+            continue
+        h = None if fence else HEADING.match(line)
+        if not h:
+            continue
+        level = len(h.group(1))
+        if found and end is None and level <= found[-1][1] and len(found) == 1:
+            end = start
+        if _heading_key(h.group(2)).startswith(key):
+            found.append((line.strip(), level))
+    names = [f[0] for f in found]
+    if len(found) != 1:
+        return None, names
+    return (end if end is not None else len(text)), names
+
+
 def cmd_place(args, eid, qmd, figs, notes) -> int:
     """Print (and optionally insert) the correct embed for a figure in the chosen
     link-style, so the title<->filename<->embed contract is never hand-typed."""
     title = args.title
     if not title:
-        print("usage: figtracer figsync place <title> [--table] [--note <name>] [--width N] [--caption ...] [-y]")
+        print("usage: figtracer figsync place <title> [--table] [--note <name>] [--after <heading>] [--width N] [--caption ...] [-y]")
         return 2
     tables = getattr(args, "_tables", None) or {}
     if getattr(args, "table", False):
@@ -906,7 +1112,8 @@ def cmd_place(args, eid, qmd, figs, notes) -> int:
         if args.caption:
             block += f"\n_{args.caption}_"
         if title not in known:
-            print(f"  ! warning: '{title}' is not a known embed=TRUE f2 title or MANIFEST figure.")
+            print(f"  ! warning: '{title}' is not a known embed=TRUE saver title or MANIFEST "
+                  f"figure.")
             print(f"    known: {', '.join(sorted(known)) or '(none)'}\n")
     print("embed block:\n  " + block.replace("\n", "\n  ") + "\n")
     if not args.note:
@@ -930,13 +1137,27 @@ def cmd_place(args, eid, qmd, figs, notes) -> int:
         print(f"(dry run) would insert into {os.path.basename(note)} — pass -y to write.")
         return 0
     txt = open(note, encoding="utf-8").read()
-    idx = txt.find("\n# Log")
+    after = getattr(args, "after", None)
+    if after is not None:
+        end, names = section_end(txt, after)
+        if end is None:
+            print(f"figsync place: --after '{after}' matched {len(names)} heading(s) in "
+                  f"{os.path.basename(note)}{': ' + '; '.join(names) if names else ''}.\n"
+                  f"  Pass more of one heading's text (its number is ignored).",
+                  file=sys.stderr)
+            return 2
+        # As before # Log: the block sits between blank lines, ahead of the line that
+        # ends the section.
+        idx = end - 1 if end < len(txt) else -1
+        where = f" (end of section {names[0]})"
+    else:
+        idx = txt.find("\n# Log")
+        where = " (before # Log)" if idx != -1 else ""
     insert = "\n" + block + "\n"
     new = (txt[:idx] + insert + txt[idx:]) if idx != -1 else (txt.rstrip("\n") + "\n" + insert)
     with open(note, "w", encoding="utf-8") as f:
         f.write(new)
-    print(f"inserted into {os.path.basename(note)}"
-          f"{' (before # Log)' if idx != -1 else ''}.")
+    print(f"inserted into {os.path.basename(note)}{where}.")
     print("  next: `figtracer figsync sync -y` to materialize the PNG.")
     return 0
 
@@ -1057,7 +1278,11 @@ def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False,
     N lines all name the same path: that is one render, and there is nothing to
     prune. Counting lines instead trashed the only (current) copy of every table
     saved more than once. So entries are de-duplicated by path before `keep` is
-    applied, and no file a surviving render uses is ever dropped."""
+    applied, and no file a surviving render uses is ever dropped.
+
+    A table record, or any CSV at the root of outputs/, is never a candidate, so
+    a table that shares its title with a figure stays when the figure's older
+    renders go. Prune has no mode that removes a table."""
     versions = _load_versions(analysis_dir, walk_up)
     drop, per_title = [], []
     for (ch, t), vs in versions.items():
@@ -1065,6 +1290,10 @@ def prune_old_renders(analysis_dir: str, keep: int = 1, execute: bool = False,
         # build; its older records name numbered siblings a person chose to keep. Never
         # a render to age out.
         vs = [e for e in vs if _manifest.kind(e) not in _manifest.EMBEDDING_KINDS]
+        # A table is not a render either, even when a figure shares its title: ranked
+        # with the figure's dated renders, the CSV fell among the older ones and went
+        # to the Trash.
+        vs = [e for e in vs if not _in_place_table(e)]
         on_disk = [e for e in vs if os.path.exists(e["_path"])]
         on_disk.sort(key=_key, reverse=True)
         seen, renders = set(), []
@@ -1118,6 +1347,128 @@ def cmd_prune(analysis_dir, keep, execute, walk_up=True) -> int:
     return 0
 
 
+RETIRED_NAME = "RETIRED.tsv"
+
+
+def document_embeds(documents: dict, resolver, eid: str) -> tuple[dict, list]:
+    """({figure title: ["deck:<title> slide 4", ...]} for this scope's figures that a
+    recorded deck or Word document embeds, [documents that could not be read]).
+
+    Read through `embeds.embed_status`, the check `drift` runs, so whatever drift would
+    report DANGLING after a retire is exactly what this refuses. A recorded file that is
+    not on disk embeds nothing; one that is on disk but cannot be read is returned in
+    the second list, since what it embeds is unknown."""
+    from figtracer import embeds, ooxml
+    used: dict[str, list[str]] = {}
+    unreadable = []
+    for t, e in sorted(documents.items()):
+        if e.get("_missing") or not os.path.exists(e["_path"]):
+            continue
+        try:
+            rows = embeds.embed_status(ooxml.read(e["_path"]), resolver)
+        except Exception:
+            unreadable.append(f"{_manifest.kind(e)}:{t}")
+            continue
+        for row in rows:
+            if row["kind"] == "figure" and row.get("exp") == eid and row.get("title"):
+                used.setdefault(row["title"], []).append(f"{_manifest.kind(e)}:{t} {row['where']}")
+    return used, unreadable
+
+
+def retire_titles(analysis_dir: str, titles: list[tuple[str, str]], eid: str, notes: list[str],
+                  documents: dict, resolver, execute: bool = False, walk_up: bool = True) -> dict:
+    """Retire superseded figure TITLES: every on-disk note-channel render of each title,
+    with its `_render_siblings`, goes to the Trash, so `drift` counts the title as having
+    no render on disk instead of UNPLACED.
+
+    `prune_old_renders` keeps the newest render of every title, so a title that a
+    differently-named figure replaced stayed UNPLACED for good. MANIFEST.jsonl is left
+    intact; each retired title gets one line in outputs/RETIRED.tsv with its reason.
+
+    A title is refused, and nothing of it moved, when a note embeds it, when a recorded
+    deck or Word document embeds it, when a recorded document cannot be read, or when
+    the MANIFEST has no figure of that title. On 2026-10-27 a helper that checked only
+    the notes trashed three titles that manuscript checkpoints and a deck embedded, and
+    drift then reported them DANGLING."""
+    versions = _load_versions(analysis_dir, walk_up)
+    ref = _note_embeds(eid, notes)
+    used, unreadable = document_embeds(documents, resolver, eid) if documents else ({}, [])
+    wanted = {t for t, _ in titles}
+    # A file of a title that is not being retired is never moved, whatever its stem.
+    protected = {os.path.realpath(p) for (ch, t), vs in versions.items()
+                 if not (ch == "note" and t in wanted)
+                 for e in vs if os.path.exists(e["_path"]) for p in _render_siblings(e["_path"])}
+    retired, refused = [], []
+    for t, why in titles:
+        if t in ref:
+            refused.append({"title": t, "why": "placed in " + ", ".join(sorted(set(ref[t])))})
+            continue
+        if t in used:
+            refused.append({"title": t, "why": "embedded in " + ", ".join(used[t])})
+            continue
+        if unreadable:
+            refused.append({"title": t, "why": "could not read " + ", ".join(unreadable)
+                            + "; what it embeds is unknown"})
+            continue
+        vs = [e for e in versions.get(("note", t), []) if _manifest.kind(e) == _manifest.FIGURE]
+        if not vs:
+            refused.append({"title": t, "why": "no figure of this title in MANIFEST"})
+            continue
+        files = sorted({p for e in vs if os.path.exists(e["_path"]) for p in _render_siblings(e["_path"])
+                        if os.path.realpath(p) not in protected})
+        retired.append({"title": t, "reason": why, "files": files})
+    drop = sorted({p for r in retired for p in r["files"]})
+    freed = sum(os.path.getsize(p) for p in drop)
+    if execute and retired:
+        _to_trash(drop)
+        ledger = os.path.join(_outputs_dir(analysis_dir, walk_up), RETIRED_NAME)
+        new = not os.path.exists(ledger)
+        stamp = datetime.now().isoformat(timespec="seconds")
+        with open(ledger, "a", encoding="utf-8") as fh:
+            if new:
+                fh.write("retired_at\ttitle\tfiles\treason\n")
+            for r in retired:
+                fh.write("\t".join([stamp, r["title"], str(len(r["files"])),
+                                    " ".join(r["reason"].split())]) + "\n")
+    return {"retired": retired, "refused": refused, "files": drop, "freed": freed}
+
+
+def read_titles_file(path: str) -> list[tuple[str, str]]:
+    """`<title>\\t<reason>` per line; the reason may be left out. Blank lines and lines
+    starting with # are skipped."""
+    out = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            t, _, why = line.partition("\t")
+            out.append((t.strip(), why.strip()))
+    return out
+
+
+def cmd_retire(analysis_dir, titles, eid, notes, documents, resolver, qmd, execute,
+               walk_up=True) -> int:
+    r = retire_titles(analysis_dir, titles, eid, notes, documents, resolver,
+                      execute=execute, walk_up=walk_up)
+    verb = "trashed" if execute else "would trash"
+    for d in r["refused"]:
+        print(f"  REFUSED  {d['title']}  ({d['why']})")
+    for d in r["retired"]:
+        why = f"  — {d['reason']}" if d["reason"] else ""
+        print(f"  {verb} {len(d['files'])} file(s): {d['title']}{why}")
+    comeback = sorted(set(d["title"] for d in r["retired"]) & _qmd_embed_titles(qmd))
+    for t in comeback:
+        print(f"  note: the notebook still writes {t} with embed = TRUE; it returns as UNPLACED "
+              "on the next render unless that call is changed")
+    print(f"\n{len(r['retired'])} title(s) retired, {len(r['refused'])} refused; "
+          f"{len(r['files'])} file(s), ~{r['freed'] / 1e6:.1f} MB"
+          f"{'' if execute else '  [DRY RUN — pass -y to move to Trash]'}")
+    if execute and r["retired"]:
+        print(f"reasons appended to outputs/{RETIRED_NAME}; MANIFEST.jsonl is left intact.")
+    return 1 if r["refused"] else 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="figtracer figsync",
                                  description="Sync lab-note figures to the latest registered render.")
@@ -1134,6 +1485,10 @@ def main(argv=None) -> int:
     ap.add_argument("--table", action="store_true",
                     help="place: the title is a TABLE (saveTable / savetable); insert its markdown "
                          "between markers instead of an image embed")
+    ap.add_argument("--after", metavar="HEADING",
+                    help="place: insert at the end of the section under the heading whose text "
+                         "starts with HEADING (its number and case ignored; subsections are part "
+                         "of the section), instead of before # Log")
     ap.add_argument("--width", type=int, default=720, help="place: embed width (default 720)")
     ap.add_argument("--link-style", choices=["markdown", "html", "obsidian"], default=None,
                     help="place: embed syntax (default from labkit config `link_style`, else html). "
@@ -1146,8 +1501,15 @@ def main(argv=None) -> int:
     ap.add_argument("--no-embed", action="store_true",
                     help="register: record without embed=TRUE (stays out of `sync`)")
     ap.add_argument("--dpi", type=int, default=300, help="raster DPI (default 300)")
-    ap.add_argument("--keep", type=int, default=1,
+    ap.add_argument("--keep", type=int, default=None,
                     help="prune: newest renders to keep per title (default 1)")
+    ap.add_argument("--title", action="append", dest="retire", metavar="TITLE",
+                    help="prune: retire this whole figure title (repeatable): trash every render "
+                         "of it; refused if a note, deck or Word document embeds it")
+    ap.add_argument("--titles-file", dest="retire_file",
+                    help="prune: retire the titles in this file, one `<title>\\t<reason>` per line")
+    ap.add_argument("--reason", default="",
+                    help="prune --title: why the titles are retired (written to outputs/RETIRED.tsv)")
     ap.add_argument("--force", action="store_true",
                     help="sync: re-rasterise every placed figure, even where the attachment is "
                          "already newer than its render (needed after a --dpi change)")
@@ -1184,7 +1546,8 @@ def main(argv=None) -> int:
         return 0
     if args.action == "drift":
         cmd_drift(figs, eid, notes, _qmd_embed_titles(qmd), attach, show_all=args.show_all,
-                  tables=tables, documents=documents, resolver=resolver)
+                  tables=tables, documents=documents, resolver=resolver,
+                  qmd_tables=_qmd_embed_titles(qmd, "table"))
         return 0
     if args.action == "place":
         args._tables = tables
@@ -1192,7 +1555,17 @@ def main(argv=None) -> int:
     if args.action == "register":
         return cmd_register(args, eid, data_dir, figs, walk_up)
     if args.action == "prune":
-        return cmd_prune(data_dir, args.keep, args.yes, walk_up)
+        if args.retire or args.retire_file:
+            if args.keep is not None:
+                ap.error("prune: --keep trims older renders; --title / --titles-file retire whole titles")
+            titles = [(t, args.reason) for t in args.retire or []]
+            if args.retire_file:
+                titles += read_titles_file(args.retire_file)
+            # The document check is the guard, so --no-documents does not turn it off.
+            docs = resolve_documents(data_dir, walk_up=walk_up)
+            look = vault_resolver(eid, data_dir, walk_up, args.config) if docs else None
+            return cmd_retire(data_dir, titles, eid, notes, docs, look, qmd, args.yes, walk_up)
+        return cmd_prune(data_dir, 1 if args.keep is None else args.keep, args.yes, walk_up)
     return cmd_sync(figs, eid, attach, note_dir, notes, args.dpi, args.yes, force=args.force,
                     tables=tables, documents=documents, resolver=resolver,
                     outputs=_outputs_dir(data_dir, walk_up) if documents else None)
