@@ -77,9 +77,9 @@ def test_run_folder_without_yaml_is_still_reported(tmp_path):
     """A half-created run must not read as no run at all — that is how an acquisition
     goes missing from the record."""
     root = _experiment(tmp_path)
-    (root / "runs" / "TB13" / "data").mkdir(parents=True)
+    (root / "runs" / "RUN13" / "data").mkdir(parents=True)
     found = runs.read_runs(str(root))
-    assert [r["run"] for r in found] == ["TB13"]
+    assert [r["run"] for r in found] == ["RUN13"]
     assert found[0]["_has_yaml"] is False
     assert "no run.yaml" in runs.runs_table(found)
 
@@ -96,7 +96,7 @@ def test_table_shows_only_the_leaf_of_a_long_source_path(tmp_path):
     The full path is still in run.yaml, which is the record."""
     root = _experiment(tmp_path)
     runs.new_run(str(root), "RUN11", date="2026-09-08",
-                 source_data="/Users/x/My Drive (long)/Wing Lab/CyTOF assays/260908 RUN11")
+                 source_data="/Users/x/My Drive (long)/Some Lab/assays/260908 RUN11")
     table = runs.runs_table(runs.read_runs(str(root)))
     assert "`260908 RUN11`" in table
     assert "My Drive" not in table

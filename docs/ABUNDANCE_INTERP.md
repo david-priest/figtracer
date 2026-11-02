@@ -41,15 +41,15 @@ doesn't require reloading a multi-GB SCE.
    effect (usually a shift in the big **naïve** compartment) moves *many* subsets
    together in the opposite direction. So always check: does the naïve fraction
    change, and do the *other* memory subsets move in step (→ denominator) or stay
-   put (→ specific)? Worked example: WHIM CD4 here — Th17-CCR2 was 54 % of CD4 vs
-   ~15 % next-highest, but Tfh/CTL/Tph were all *low*, not co-elevated → a specific
-   enrichment (durable Th17 "what's left" after naïve loss), NOT a uniform naïve-
+   put (→ specific)? Example (invented numbers): one memory cluster is 50 % of CD4
+   in a condition vs ~15 % for the next-highest, while the other memory clusters are
+   all *low*, not co-elevated → a specific enrichment, NOT a uniform naïve-
    depletion artefact. Reading only the boxplot, or only that one cluster, would
    have missed the distinction.
 
 3. **Per-sample, not just per-condition mean.** Check the individual samples behind
    a condition mean — is the effect in all of them or one outlier? State the n
-   (e.g. WHIM here = 2 samples, ~1 donor). A condition of n=1–2 is exploratory.
+   (e.g. a condition of 2 samples from 1 donor). A condition of n=1–2 is exploratory.
 
 4. **Relative vs absolute.** These are %-of-parent. If the biological question is
    absolute (e.g. lymphopenia), a % rise can coexist with an absolute fall — note it

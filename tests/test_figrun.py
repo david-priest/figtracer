@@ -1554,7 +1554,7 @@ def test_missing_runner_is_a_clear_error(monkeypatch):
 # ── --qmd: choosing among an experiment's several notebooks ───────────────────
 
 def _exp_tree(tmp_path):
-    """An experiment root holding three notebooks, the way the GateLab paper's does."""
+    """An experiment root holding three notebooks, the way a paper's analysis folder can."""
     adir = tmp_path / "exp" / "analysis"
     adir.mkdir(parents=True)
     for name in ("E.qmd", "E-roundtrip.qmd", "E-cytof.qmd"):

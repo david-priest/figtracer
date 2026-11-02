@@ -333,7 +333,7 @@ def new(project: str, title: str, platform: str | None = None,
     # A hand-supplied id is already the name the lab uses. Appending the title slug to it
     # produces `PROJ-cell-assay cell-assay-across-runs`, where the second half only repeats
     # the first -- so the folders were being renamed by hand after every scaffold.
-    # Generated ids keep the slug: `CMV-2026-09-04-A` alone says nothing about the work.
+    # Generated ids keep the slug: `PROJ-2026-09-04-A` alone says nothing about the work.
     folder_name = exp_id if explicit_id else f"{exp_id} {slug}"
 
     # A template never replaces a notebook or a run plan that is already there. Checked here,

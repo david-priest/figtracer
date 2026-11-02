@@ -140,7 +140,7 @@ def test_check_reports_each_state_and_exits_one_on_a_finding(tmp_path, monkeypat
 
 def test_check_resolves_a_tag_from_another_experiment_through_the_vault(tmp_path, monkeypatch, capsys):
     """A manuscript recorded at its project tags figures of several experiments, and `check`
-    resolves each tag's own experiment as `figsync drift` does. The GateLab manuscript's six
+    resolves each tag's own experiment as `figsync drift` does. A manuscript's six
     figures all read UNKNOWN EXP under --project before this."""
     from figtracer import figsync
     root = _exp(tmp_path)

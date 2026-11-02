@@ -316,7 +316,7 @@ All notable changes to figtracer are documented here. The format is based on
   the title slug. A hand-supplied id is already the name the lab uses, so `--id PROJ-cell-assay`
   was producing `PROJ-cell-assay cell-assay-across-runs`, whose second half only repeats the
   first — and it was being renamed by hand after every scaffold. Generated ids keep the slug, since
-  `CMV-2026-09-07-A` alone says nothing about the work.
+  `PROJ-2026-09-07-A` alone says nothing about the work.
 
 - notecheck exempts a note's `# Log` section by default (`--include-log` to opt back in).
   A dated log entry records what was true THEN; checking it against the current corpus
